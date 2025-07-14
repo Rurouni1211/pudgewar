@@ -12,10 +12,10 @@ export class GameScene extends Phaser.Scene {
 
     // Initialize ability/game state variables in constructor
     this.cooldowns = { hook: 0, blink: 0, shift: 0 };
-    this.currentAbility = null;
+    this.currentAbility = null; // Should be null initially
     this.facing = "up"; // Default facing direction
     this.shiftActive = false;
-    this.originalColor = 0x00ff00; // Store original color for shift ability
+    this.originalColor = 0x00ff00; // Store original color for shift ability (green)
     this.shiftTimer = null; // Reference to the Phaser timed event for shift duration
   }
 
@@ -32,20 +32,21 @@ export class GameScene extends Phaser.Scene {
     console.log("GameScene: create method started.");
 
     // Critical: Clear ALL socket listeners here before re-registering
-    // This is the most common cause of weird listener behavior across scene changes
+    // This prevents duplicate listeners if the scene is ever restarted
     socket.removeAllListeners();
 
     // Create player and enemy visual representations (rectangles)
-    this.myBox = this.add.rectangle(0, 0, 32, 32, 0x00ff00);
-    this.enemyBox = this.add.rectangle(0, 0, 32, 32, 0xff0000);
+    // IMPORTANT FIX: Set a high enough depth for player boxes so they are visible
+    this.myBox = this.add.rectangle(0, 0, 32, 32, 0x00ff00).setDepth(5); // Player's green box
+    this.enemyBox = this.add.rectangle(0, 0, 32, 32, 0xff0000).setDepth(5); // Opponent's red box
 
     // Setup keyboard input
     this.cursors = this.input.keyboard.createCursorKeys();
-    this.WASD = this.input.keyboard.addKeys("W,A,S,D");
+    this.WASD = this.input.keyboard.addKeys("W,A,S,D"); // Ensure these are correctly mapped
     this.input.keyboard.on("keydown-Q", this.tryHook, this);
     this.input.keyboard.on("keydown-R", this.tryBlink, this);
     this.input.keyboard.on("keydown-E", this.tryShift, this);
-    this.input.keyboard.on("keydown-S", this.cancelAction, this);
+    this.input.keyboard.on("keydown-S", this.cancelAction, this); // 'S' for Cancel Action
 
     // Setup ability icons and their cooldown overlays/texts
     this.skillIcons = {
@@ -71,22 +72,47 @@ export class GameScene extends Phaser.Scene {
 
     this.cooldownTexts = {
       hook: this.add
-        .text(50, 550, "", { font: "16px Arial", fill: "#fff" })
-        .setOrigin(0.5),
+        .text(50, 550, "", {
+          font: "20px Arial",
+          fontStyle: "bold",
+          fill: "#ffffff",
+          stroke: "#000000",
+          strokeThickness: 3,
+        })
+        .setOrigin(0.5)
+        .setDepth(12),
+
       blink: this.add
-        .text(120, 550, "", { font: "16px Arial", fill: "#fff" })
-        .setOrigin(0.5),
+        .text(120, 550, "", {
+          font: "20px Arial",
+          fontStyle: "bold",
+          fill: "#ffffff",
+          stroke: "#000000",
+          strokeThickness: 3,
+        })
+        .setOrigin(0.5)
+        .setDepth(12),
+
       shift: this.add
-        .text(190, 550, "", { font: "16px Arial", fill: "#fff" })
-        .setOrigin(0.5),
+        .text(190, 550, "", {
+          font: "20px Arial",
+          fontStyle: "bold",
+          fill: "#ffffff",
+          stroke: "#000000",
+          strokeThickness: 3,
+        })
+        .setOrigin(0.5)
+        .setDepth(12),
     };
 
     // Draw the dividing line in the middle of the game area
+    // Set its depth lower than players but higher than background
     this.add
       .line(0, 300, 0, 0, 1024, 0, 0xffffff)
       .setOrigin(0, 0)
       .setLineWidth(2)
-      .setAlpha(0.2);
+      .setAlpha(0.2)
+      .setDepth(1);
 
     // Handle initial game data passed from the LobbyScene
     if (
@@ -208,11 +234,16 @@ export class GameScene extends Phaser.Scene {
 
     // Add physics body AFTER setting initial position. This is critical for movement.
     this.physics.add.existing(this.myBox);
-    this.myBox.body.setCollideWorldBounds(true); // Player stays within world bounds
+    this.myBox.body.setCollideWorldBounds(true);
+    this.myBox.body.setImmovable(false); // allow movement
+    this.myBox.body.setAllowGravity(false); // disable gravity
+    this.myBox.body.setSize(32, 32); // define body size manually
+    this.myBox.body.setBounce(0); // prevent bounciness
+    console.log("💡 myBox.body type:", this.myBox.body.constructor.name);
 
     // Set player-specific movement bounds (top or bottom half)
     if (mySpawn.y < 300) {
-      // If my spawn Y is in the upper half
+      // If my spawn Y is in the upper half (game height is 600, so half is 300)
       this.playerBounds = new Phaser.Geom.Rectangle(0, 0, 1024, 300); // My bounds are the top half
       console.log(
         `GameScene Setup: Player ${
@@ -235,8 +266,6 @@ export class GameScene extends Phaser.Scene {
    * Phaser's update loop, runs every frame. Handles player movement and cooldowns.
    */
   update() {
-    console.log("myBox:", this.myBox);
-    console.log("myBox.body:", this.myBox?.body);
     // Only allow movement if myBox and its physics body exist,
     // playerBounds are defined, and 'hook' ability isn't active
     if (
@@ -272,41 +301,43 @@ export class GameScene extends Phaser.Scene {
     // Apply velocity if not in shift mode
     if (!this.shiftActive) {
       this.myBox.body.setVelocity(velocityX, velocityY);
+
+      // After setting velocity, Phaser's physics engine will move the body.
+      // We then clamp the *body's* position directly to enforce boundaries.
+      // Remember myBox.body.x/y are top-left, while myBox.x/y are center.
+      this.myBox.body.x = Phaser.Math.Clamp(
+        this.myBox.body.x,
+        this.playerBounds.x, // Left edge of bounds
+        this.playerBounds.right - this.myBox.body.width // Right edge of bounds minus body width
+      );
+      this.myBox.body.y = Phaser.Math.Clamp(
+        this.myBox.body.y,
+        this.playerBounds.y, // Top edge of bounds
+        this.playerBounds.bottom - this.myBox.body.height // Bottom edge of bounds minus body height
+      );
+
+      // Now, sync the visual rectangle's center to the physics body's center
+      this.myBox.x = this.myBox.body.x + this.myBox.body.width / 2;
+      this.myBox.y = this.myBox.body.y + this.myBox.body.height / 2;
+
+      // Emit player movement to the server only if the player actually moved
+      // (This condition should still be based on original velocity, not clamped result)
+      if (velocityX !== 0 || velocityY !== 0) {
+        socket.emit("playerMove", {
+          id: socket.id,
+          x: this.myBox.x, // Emit the updated, clamped visual position
+          y: this.myBox.y,
+        });
+      }
     } else {
-      this.myBox.body.setVelocity(0, 0); // Player cannot move during shift
-    }
-
-    // Clamp myBox position within its designated playerBounds
-    this.myBox.x = Phaser.Math.Clamp(
-      this.myBox.x,
-      this.playerBounds.x + this.myBox.width / 2, // Left bound + half width (since origin is center)
-      this.playerBounds.right - this.myBox.width / 2 // Right bound - half width
-    );
-    this.myBox.y = Phaser.Math.Clamp(
-      this.myBox.y,
-      this.playerBounds.y + this.myBox.height / 2, // Top bound + half height
-      this.playerBounds.bottom - this.myBox.height / 2 // Bottom bound - half height
-    );
-
-    // Manually update physics body position to match the clamped visual position
-    // (Phaser's body position is top-left, rectangle position is center by default)
-    this.myBox.body.x = this.myBox.x - this.myBox.body.width / 2;
-    this.myBox.body.y = this.myBox.y - this.myBox.body.height / 2;
-
-    // Emit player movement to the server only if the player actually moved
-    if (velocityX !== 0 || velocityY !== 0) {
-      socket.emit("playerMove", {
-        id: socket.id,
-        x: this.myBox.x,
-        y: this.myBox.y,
-      });
+      this.myBox.body.setVelocity(0, 0);
     }
 
     // Update cooldown texts for abilities
     for (const key in this.cooldowns) {
       const remaining = this.cooldowns[key] - this.time.now;
       this.cooldownTexts[key].setText(
-        remaining > 0 ? Math.ceil(remaining / 1000) : "" // Display seconds remaining
+        remaining >= 0 ? Math.ceil(remaining / 1000).toString() : "" // Display seconds remaining
       );
     }
   }
@@ -323,6 +354,7 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     this.currentAbility = "hook"; // Set current ability
+    console.log("currentAbility set to 'hook' in tryHook"); // DEBUG
     this.cooldowns.hook = this.time.now + 4000; // 4-second cooldown
     this.highlightSkill("hook");
     this.showCooldown("hook", 4000);
@@ -357,8 +389,12 @@ export class GameScene extends Phaser.Scene {
     const hookLine = this.add.graphics();
     hookLine.lineStyle(2, 0xffffff, 1); // White line
     hookLine.beginPath().moveTo(startX, startY).lineTo(endX, endY).strokePath();
+    hookLine.setDepth(6); // Ensure hook line is visible, above players
     this.time.delayedCall(500, () => hookLine.destroy()); // Destroy line after 0.5s
-    this.time.delayedCall(1000, () => (this.currentAbility = null)); // Clear ability status after 1s
+    this.time.delayedCall(1000, () => {
+      this.currentAbility = null; // Clear ability status
+      console.log("currentAbility cleared (Hook ability ended)."); // DEBUG
+    });
   }
 
   /**
@@ -379,6 +415,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.currentAbility = "blink";
+    console.log("currentAbility set to 'blink' in tryBlink"); // DEBUG
     this.cooldowns.blink = this.time.now + 4000; // 4-second cooldown
     this.highlightSkill("blink");
     this.showCooldown("blink", 4000);
@@ -422,7 +459,10 @@ export class GameScene extends Phaser.Scene {
       this.myBox.body.y = newY - this.myBox.body.height / 2;
     }
     socket.emit("blinkFired", { playerId: socket.id, newX, newY }); // Notify server
-    this.time.delayedCall(200, () => (this.currentAbility = null)); // Clear ability status quickly
+    this.time.delayedCall(200, () => {
+      this.currentAbility = null;
+      console.log("currentAbility cleared (Blink ability ended)."); // DEBUG
+    });
   }
 
   /**
@@ -437,6 +477,7 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     this.currentAbility = "shift";
+    console.log("currentAbility set to 'shift' in tryShift"); // DEBUG
     this.cooldowns.shift = this.time.now + 5000; // 5-second cooldown
     this.shiftActive = true; // Activate shift state
     this.highlightSkill("shift");
@@ -452,7 +493,7 @@ export class GameScene extends Phaser.Scene {
       this.myBox.fillColor = this.originalColor; // Revert color
       socket.emit("shiftEnd", { playerId: socket.id }); // Notify server
       this.currentAbility = null; // Clear ability status
-      console.log("Shift duration ended.");
+      console.log("currentAbility cleared (Shift duration ended)."); // DEBUG
     });
   }
 
@@ -470,7 +511,7 @@ export class GameScene extends Phaser.Scene {
       this.myBox.fillColor = this.originalColor;
       socket.emit("shiftEnd", { playerId: socket.id });
       this.currentAbility = null;
-      console.log("Shift cancelled manually.");
+      console.log("currentAbility cleared (Shift cancelled manually)."); // DEBUG
     }
 
     // Stop player movement

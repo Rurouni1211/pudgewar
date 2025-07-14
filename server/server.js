@@ -1,4 +1,4 @@
-// server.js (Only a minor change for robustness)
+// server.js
 const express = require("express");
 const http = require("http");
 const app = express();
@@ -10,8 +10,14 @@ const PORT = 3000;
 
 app.use(express.static("client"));
 
-let players = {};
+let players = {}; // Stores player data: { socketId: { score, lastPosition: {x,y}, bounds: {x, y, width, height} }, ... }
 let rooms = {};
+
+// Game Constants (should match client-side for consistent logic)
+const GAME_WIDTH = 1024;
+const GAME_HEIGHT = 600;
+const MID_LINE_Y = GAME_HEIGHT / 2; // 300
+const PLAYER_SIZE = 32; // Assuming player box is 32x32
 
 io.on("connection", (socket) => {
   console.log(`🔌 User connected: ${socket.id}`);
@@ -63,20 +69,63 @@ io.on("connection", (socket) => {
       const [id1, id2] = room;
       console.log(`🎮 Two players in room ${roomCode}. Starting game...`);
 
+      // Assign Player 1 to the top half, Player 2 to the bottom half
       const spawnTop = {
-        x: Math.floor(Math.random() * 800) + 100,
-        y: Math.floor(Math.random() * 100) + 50,
+        x:
+          Math.floor(Math.random() * (GAME_WIDTH - PLAYER_SIZE)) +
+          PLAYER_SIZE / 2, // Centered X, within bounds
+        y:
+          Math.floor(Math.random() * (MID_LINE_Y - PLAYER_SIZE)) +
+          PLAYER_SIZE / 2, // Centered Y, within top half
       };
       const spawnBottom = {
-        x: Math.floor(Math.random() * 800) + 100,
-        y: Math.floor(Math.random() * 100) + 400,
+        x:
+          Math.floor(Math.random() * (GAME_WIDTH - PLAYER_SIZE)) +
+          PLAYER_SIZE / 2, // Centered X, within bounds
+        y:
+          Math.floor(Math.random() * (MID_LINE_Y - PLAYER_SIZE)) +
+          MID_LINE_Y +
+          PLAYER_SIZE / 2, // Centered Y, within bottom half
       };
+      players[id1].bounds = {
+        x: 0,
+        y: 0,
+        width: GAME_WIDTH,
+        height: MID_LINE_Y,
+      }; // Top half
+      players[id2].bounds = {
+        x: 0,
+        y: MID_LINE_Y,
+        width: GAME_WIDTH,
+        height: MID_LINE_Y,
+      }; // Bottom half
 
+      console.log(`SERVER DEBUG: Player ${id1} bounds:`, players[id1].bounds);
+      console.log(`SERVER DEBUG: Player ${id2} bounds:`, players[id2].bounds);
+      // Store bounds for each player on the server
       players[id1].lastPosition = spawnTop;
+      players[id1].bounds = {
+        x: 0,
+        y: 0,
+        width: GAME_WIDTH,
+        height: MID_LINE_Y,
+      }; // Top half
       players[id2].lastPosition = spawnBottom;
+      players[id2].bounds = {
+        x: 0,
+        y: MID_LINE_Y,
+        width: GAME_WIDTH,
+        height: MID_LINE_Y,
+      }; // Bottom half
 
       console.log(
-        `Spawn positions: ${id1} at (${spawnTop.x}, ${spawnTop.y}), ${id2} at (${spawnBottom.x}, ${spawnBottom.y})`
+        `Spawn positions and bounds: ${id1} at (${spawnTop.x}, ${
+          spawnTop.y
+        }) in [${players[id1].bounds.y}, ${
+          players[id1].bounds.y + players[id1].bounds.height
+        }], ${id2} at (${spawnBottom.x}, ${spawnBottom.y}) in [${
+          players[id2].bounds.y
+        }, ${players[id2].bounds.y + players[id2].bounds.height}]`
       );
 
       io.to(roomCode).emit("startGame", {
@@ -95,11 +144,43 @@ io.on("connection", (socket) => {
       return;
     }
 
-    if (players[id]) {
-      players[id].lastPosition = { x, y };
-      socket.to(room).emit("playerMove", { id, x, y });
+    const player = players[id];
+    if (player && player.bounds) {
+      // Ensure player data and bounds exist
+      // Clamp the received position to the player's server-defined bounds
+      // Remember x,y from client are center coordinates
+      x = Math.max(
+        player.bounds.x + PLAYER_SIZE / 2,
+        Math.min(x, player.bounds.x + player.bounds.width - PLAYER_SIZE / 2)
+      );
+      y = Math.max(
+        player.bounds.y + PLAYER_SIZE / 2,
+        Math.min(y, player.bounds.y + player.bounds.height - PLAYER_SIZE / 2)
+      );
+
+      player.lastPosition = { x, y }; // Update server's authoritative position
+      socket.to(room).emit("playerMove", { id, x, y }); // Emit the *clamped* position
     } else {
-      console.log(`❓ Player ${id} not found in players object.`);
+      console.log(
+        `❓ Player ${id} not found or missing bounds. Current players:`,
+        Object.keys(players)
+      );
+    }
+    // Inside socket.on("playerMove")
+    if (player) {
+      // Changed from player && player.bounds for initial check
+      console.log(
+        `SERVER DEBUG: Received playerMove from ${id} at (${x}, ${y})`
+      );
+      console.log(
+        `SERVER DEBUG: Player ${id} data (including bounds):`,
+        player
+      );
+      if (!player.bounds) {
+        console.error(`SERVER ERROR: Player ${id} has no bounds defined!`);
+        return; // Exit if no bounds, this is a critical error
+      }
+      // ... rest of clamping logic ...
     }
   });
 
@@ -110,8 +191,8 @@ io.on("connection", (socket) => {
       return;
     }
     const opponentId = rooms[room]?.find((id) => id !== playerId);
-    const pullTo = players[playerId]?.lastPosition;
-    if (!opponentId || !pullTo) {
+    const pullToPlayer = players[playerId]; // Get player's full data
+    if (!opponentId || !pullToPlayer || !pullToPlayer.lastPosition) {
       console.log(
         `⚠️ Hook fired by ${playerId}, but opponent or pullTo position missing.`
       );
@@ -126,18 +207,32 @@ io.on("connection", (socket) => {
     io.to(room).emit("hookHit", {
       by: playerId,
       target: opponentId,
-      pullTo,
+      pullTo: pullToPlayer.lastPosition, // Use the server's last known position
     });
 
-    const isOpponentBottom = rooms[room].indexOf(opponentId) === 1;
-    const respawnY = isOpponentBottom
-      ? Math.floor(Math.random() * 100) + 400
-      : Math.floor(Math.random() * 100) + 50;
-    const respawnX = Math.floor(Math.random() * 800) + 100;
+    const opponent = players[opponentId];
+    if (!opponent || !opponent.bounds) {
+      console.warn(
+        `Opponent ${opponentId} or their bounds not found for respawn.`
+      );
+      return;
+    }
 
-    players[opponentId].lastPosition = { x: respawnX, y: respawnY };
+    // Respawn within opponent's OWN boundaries
+    const respawnX =
+      Math.floor(Math.random() * (opponent.bounds.width - PLAYER_SIZE)) +
+      opponent.bounds.x +
+      PLAYER_SIZE / 2;
+    const respawnY =
+      Math.floor(Math.random() * (opponent.bounds.height - PLAYER_SIZE)) +
+      opponent.bounds.y +
+      PLAYER_SIZE / 2;
+
+    opponent.lastPosition = { x: respawnX, y: respawnY };
     console.log(
-      `♻️ Opponent ${opponentId} respawned at (${respawnX}, ${respawnY})`
+      `♻️ Opponent ${opponentId} respawned at (${respawnX}, ${respawnY}) in their bounds [${
+        opponent.bounds.y
+      }, ${opponent.bounds.y + opponent.bounds.height}]`
     );
 
     io.to(opponentId).emit("respawn", {
@@ -153,11 +248,28 @@ io.on("connection", (socket) => {
       console.log(`🚫 Blink fired by ${playerId} without a room.`);
       return;
     }
-    if (players[playerId]) {
-      players[playerId].lastPosition = { x: newX, y: newY };
-      console.log(`✨ Player ${playerId} blinked to (${newX}, ${newY})`);
+    const player = players[playerId];
+    if (player && player.bounds) {
+      // Clamp blink destination on server
+      newX = Math.max(
+        player.bounds.x + PLAYER_SIZE / 2,
+        Math.min(newX, player.bounds.x + player.bounds.width - PLAYER_SIZE / 2)
+      );
+      newY = Math.max(
+        player.bounds.y + PLAYER_SIZE / 2,
+        Math.min(newY, player.bounds.y + player.bounds.height - PLAYER_SIZE / 2)
+      );
+
+      player.lastPosition = { x: newX, y: newY };
+      console.log(
+        `✨ Player ${playerId} blinked to (${newX}, ${newY}) (clamped)`
+      );
+      io.to(room).emit("blinkEffect", { playerId, newX, newY });
+    } else {
+      console.log(
+        `❓ Player ${playerId} not found or missing bounds for blink.`
+      );
     }
-    io.to(room).emit("blinkEffect", { playerId, newX, newY });
   });
 
   socket.on("shiftFired", ({ playerId }) => {
@@ -205,7 +317,7 @@ io.on("connection", (socket) => {
         );
       }
     }
-    delete players[socket.id];
+    delete players[socket.id]; // Remove player data regardless of room status
   });
 });
 

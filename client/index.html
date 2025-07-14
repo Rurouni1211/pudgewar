@@ -1,12 +1,43 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>1v1 Hook Game</title>
-  <script src="https://cdn.jsdelivr.net/npm/phaser@3"></script>
-  <script src="/socket.io/socket.io.js"></script>
+    <title>1v1 Hook Game</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        /* Essential CSS to make the canvas fill the screen and prevent scrollbars */
+        html, body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* Hide scrollbars */
+            width: 100%;
+            height: 100%;
+            background-color: #000; /* Solid black background for easier visibility contrast */
+        }
+        canvas {
+            display: block; /* Removes extra space below inline-block elements */
+            margin: 0 auto; /* Centers the canvas horizontally if it's smaller than viewport */
+            width: 100vw; /* Make canvas width 100% of viewport width */
+            height: 100vh; /* Make canvas height 100% of viewport height */
+            object-fit: contain; /* Ensures game scales correctly without distortion within viewport */
+            /* The 'contain' value ensures the entire game is visible within the screen,
+               maintaining its aspect ratio. If the aspect ratio of the window
+               doesn't match the game, there will be black bars (letterboxing). */
+        }
+        /* Optional: If you see a tiny game in the top left, you might have an additional
+           margin/padding or a scaling issue from parent elements.
+           You can target the div Phaser creates if needed:
+           #phaser-game-container { // Or whatever div ID Phaser creates
+               width: 100%;
+               height: 100%;
+               display: flex;
+               justify-content: center;
+               align-items: center;
+           }
+        */
+    </style>
 </head>
 <body>
-  <script type="module" src="game.js"></script>
-
+    <script type="module" src="game.js"></script>
 </body>
 </html>
