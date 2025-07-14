@@ -1,0 +1,44 @@
+# Node
+node_modules/
+.env
+.DS_Store
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS
+Thumbs.db
+ehthumbs.db
+Icon?
+Desktop.ini
+
+# Build
+dist/
+build/
+*.log
+
+# IDEs
+.vscode/
+.idea/
+*.sw?
+
+# Phaser specific
+assets/spritesheets/.DS_Store
+assets/audio/.DS_Store
+assets/**/*.mp3
+assets/**/*.wav
+assets/**/*.ogg
+
+# Ignore local dev server settings
+*.local
+
+# Ignore bundled assets if not tracked
+client/assets/*.png
+client/assets/*.jpg
+client/assets/*.gif
+client/assets/*.psd
+
+# Ignore compiled cache
+.cache/
+.cache-loader/
