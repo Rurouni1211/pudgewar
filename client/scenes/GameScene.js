@@ -9,6 +9,7 @@ export class GameScene extends Phaser.Scene {
     this.enemyBox = null;
     this.opponentId = null;
     this.playerBounds = null;
+    this.isTopPlayer = false; // Flag to determine which half the player belongs to
 
     this.cooldowns = { hook: 0, blink: 0, shift: 0 };
     this.currentAbility = null;
@@ -19,8 +20,7 @@ export class GameScene extends Phaser.Scene {
 
     this.activeHookLine = null;
     this.hookTween = null;
-
-    // Removed: this.isMouseDownForMovement - not needed for click-to-move
+    this.respawnCountdownText = null; // New: For displaying countdown
   }
 
   preload() {
@@ -28,11 +28,17 @@ export class GameScene extends Phaser.Scene {
     this.load.image("hookIcon", "assets/hook.png");
     this.load.image("blinkIcon", "assets/blink.png");
     this.load.image("shiftIcon", "assets/shift.png");
+    this.load.image("bg", "assets/background.png");
     console.log("GameScene: Assets preloaded.");
   }
 
   create(initialGameData) {
     console.log("GameScene: create method started.");
+    this.add
+      .image(0, 0, "bg")
+      .setOrigin(0, 0)
+      .setDisplaySize(this.game.config.width, this.game.config.height)
+      .setDepth(-100);
 
     socket.removeAllListeners();
 
@@ -71,9 +77,6 @@ export class GameScene extends Phaser.Scene {
         });
       }
     });
-    // For Dota 2 style, releasing the mouse button does NOT cancel movement.
-    // The player continues to the set target.
-    // Therefore, we don't need a specific 'pointerup' handler to clear targetPosition for movement.
 
     // Setup ability icons and their cooldown overlays/texts (unchanged)
     this.skillIcons = {
@@ -128,6 +131,21 @@ export class GameScene extends Phaser.Scene {
         .setDepth(12),
     };
 
+    // Respawn countdown text setup
+    this.respawnCountdownText = this.add
+      .text(this.game.config.width / 2, this.game.config.height / 2, "", {
+        font: "48px Arial",
+        fontStyle: "bold",
+        fill: "#fff",
+        stroke: "#000",
+        strokeThickness: 6,
+      })
+      .setOrigin(0.5)
+      .setDepth(20)
+      .setVisible(false);
+
+    // This line draws a white line at y=300 for visual debugging or reference.
+    // It's not involved in collision/bounds.
     this.add
       .line(0, 300, 0, 0, 1024, 0, 0xffffff)
       .setOrigin(0, 0)
@@ -150,10 +168,11 @@ export class GameScene extends Phaser.Scene {
       );
     }
 
-    // --- Socket Listeners (unchanged from last correct version) ---
+    // --- Socket Listeners ---
     socket.on("playerMove", ({ id, x, y }) => {
       if (id !== socket.id) this.enemyBox.setPosition(x, y);
     });
+
     socket.on(
       "hookStarted",
       ({ playerId, startX, startY, hookAngle, hookLength, hookSpeed }) => {
@@ -194,6 +213,7 @@ export class GameScene extends Phaser.Scene {
         });
       }
     );
+
     socket.on("hookHit", ({ by, target, pullTo }) => {
       console.log(
         `🎣 HookHit received: by ${by}, target ${target}, pullTo (${pullTo.x}, ${pullTo.y})`
@@ -210,20 +230,35 @@ export class GameScene extends Phaser.Scene {
         this.tweens.add({
           targets: this.enemyBox,
           x: pullTo.x,
-          y: pullTo.y - 40,
+          y: pullTo.y - 40, // Adjust pullTo Y if needed for visual effect
           duration: 300,
         });
         this.currentAbility = null;
         console.log("currentAbility cleared (Hook hit by me).");
       } else if (target === socket.id) {
+        // If I am the target, apply temporary visual effect after pull
         this.tweens.add({
           targets: this.myBox,
           x: pullTo.x,
-          y: pullTo.y + 40,
+          y: pullTo.y + 40, // Adjust pullTo Y if needed for visual effect
           duration: 300,
+          onComplete: () => {
+            // Client-side visual and state management for being hooked
+            this.myBox.setVisible(false); // Hide player immediately after pull
+            this.currentAbility = "hooked"; // Set a temporary state to prevent movement/abilities
+            console.log("Player hidden and in 'hooked' state.");
+            this.respawnCountdownText.setVisible(true).setText("2"); // Show countdown
+            this.time.delayedCall(1000, () =>
+              this.respawnCountdownText.setText("1")
+            );
+            this.time.delayedCall(2000, () =>
+              this.respawnCountdownText.setText("")
+            ); // Clear after delay
+          },
         });
       }
     });
+
     socket.on("hookMiss", () => {
       console.log("❌ HookMiss received.");
       if (this.activeHookLine) {
@@ -237,6 +272,15 @@ export class GameScene extends Phaser.Scene {
       this.currentAbility = null;
       console.log("currentAbility cleared (Hook missed).");
     });
+
+    socket.on("startRespawnCountdown", () => {
+      // This event is now redundant as we show countdown after hookHit,
+      // but keeping it here for clarity if you want to use it for other events.
+      console.log(
+        "Received startRespawnCountdown from server (client-side already handles this)."
+      );
+    });
+
     socket.on("respawn", ({ x, y, target }) => {
       console.log(`♻️ Respawn received for ${target}: (${x}, ${y})`);
       if (socket.id === target) {
@@ -245,8 +289,13 @@ export class GameScene extends Phaser.Scene {
           this.myBox.body.x = x - this.myBox.body.width / 2;
           this.myBox.body.y = y - this.myBox.body.height / 2;
         }
+        this.myBox.setVisible(true); // Ensure player is visible after respawn
+        this.currentAbility = null; // Ensure ability state is cleared after respawn
+        this.respawnCountdownText.setVisible(false); // Hide countdown text
+        console.log("Player respawned and visible.");
       }
     });
+
     socket.on("blinkEffect", ({ playerId, newX, newY }) => {
       console.log(
         `✨ BlinkEffect received for ${playerId}: (${newX}, ${newY})`
@@ -300,19 +349,47 @@ export class GameScene extends Phaser.Scene {
     );
     this.enemyBox.setPosition(enemySpawn.x, enemySpawn.y);
 
-    if (mySpawn.y < 300) {
-      this.playerBounds = new Phaser.Geom.Rectangle(0, 0, 1024, 300);
+    // --- CRITICAL CONSTANTS: ADJUST THESE BASED ON YOUR BACKGROUND IMAGE ---
+    // These values define the *visual* top and bottom edges of the impassable river.
+    const riverVisualTop = 240; // The Y-coordinate where the river visually begins (top player's boundary)
+    const riverVisualBottom = 380; // The Y-coordinate where the river visually ends (bottom player's boundary)
+    // --- END CRITICAL CONSTANTS ---
+
+    const gameHeight = this.game.config.height; // Should be 600
+    const gameWidth = this.game.config.width; // Should be 1024
+    const playerSize = this.myBox.body.width; // 32
+
+    // Determine if this client is the top player based on spawn position
+    // Assuming players spawn on either side of the actual mid-point (GAME_HEIGHT / 2)
+    this.isTopPlayer = mySpawn.y < gameHeight / 2;
+
+    if (this.isTopPlayer) {
+      // Bounds for the top player: from (0,0) to (gameWidth, riverVisualTop)
+      // The `height` of the rectangle represents the maximum Y-coordinate for the *bottom edge* of the player.
+      // So, the top-left corner of the player can go from 0 up to (riverVisualTop - playerSize).
+      this.playerBounds = new Phaser.Geom.Rectangle(
+        0,
+        0,
+        gameWidth,
+        riverVisualTop
+      );
       console.log(
         `GameScene Setup: Player ${
           socket.id
-        } is in the top half. Bounds: ${JSON.stringify(this.playerBounds)}`
+        } is the TOP player. Bounds: ${JSON.stringify(this.playerBounds)}`
       );
     } else {
-      this.playerBounds = new Phaser.Geom.Rectangle(0, 300, 1024, 300);
+      // Bounds for the bottom player: from (0, riverVisualBottom) to (gameWidth, gameHeight)
+      this.playerBounds = new Phaser.Geom.Rectangle(
+        0,
+        riverVisualBottom, // Top Y for the bottom player's bounds
+        gameWidth,
+        gameHeight - riverVisualBottom // Height of the playable area for the bottom player
+      );
       console.log(
         `GameScene Setup: Player ${
           socket.id
-        } is in the bottom half. Bounds: ${JSON.stringify(this.playerBounds)}`
+        } is the BOTTOM player. Bounds: ${JSON.stringify(this.playerBounds)}`
       );
     }
     console.log("GameScene Setup: Initial game setup complete.");
@@ -322,12 +399,21 @@ export class GameScene extends Phaser.Scene {
    * Phaser's update loop, runs every frame. Handles player movement and cooldowns.
    */
   update() {
-    // Only allow movement if myBox/playerBounds are ready, and 'hook' ability is not active
+    // Only allow movement if myBox/playerBounds are ready, and player is not hooked
     if (
       !this.myBox?.body ||
       !this.playerBounds ||
-      this.currentAbility === "hook"
+      this.currentAbility === "hooked" // Prevent movement if "hooked"
     ) {
+      // If we're hooked, we should stop any ongoing movement.
+      if (this.myBox?.body && this.myBox.body.speed > 0) {
+        this.myBox.body.setVelocity(0, 0);
+        socket.emit("playerMove", {
+          id: socket.id,
+          x: this.myBox.x,
+          y: this.myBox.y,
+        });
+      }
       return;
     }
 
@@ -374,62 +460,24 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    // --- Keyboard Movement ---
-    // Uncomment and modify this section if you want keyboard movement to override/interact
-    // with mouse movement in a specific way. As per current logic, mouse movement
-    // takes precedence if targetPosition is set.
-    // if (
-    //   !this.targetPosition ||
-    //   this.cursors.left.isDown ||
-    //   this.WASD.A.isDown ||
-    //   this.cursors.right.isDown ||
-    //   this.WASD.D.isDown ||
-    //   this.cursors.up.isDown ||
-    //   this.WASD.W.isDown ||
-    //   this.cursors.down.isDown ||
-    //   this.WASD.S.isDown
-    // ) {
-    //   // If keyboard input, clear any pending mouse target
-    //   if (velocityX !== 0 || velocityY !== 0) {
-    //     // If mouse movement was active before this check
-    //     this.targetPosition = null; // Clear mouse target as keyboard takes over
-    //   }
-
-    //   if (this.cursors.left.isDown || this.WASD.A.isDown) {
-    //     velocityX = -speed;
-    //     this.facing = "left";
-    //     playerMovedThisFrame = true;
-    //   } else if (this.cursors.right.isDown || this.WASD.D.isDown) {
-    //     velocityX = speed;
-    //     this.facing = "right";
-    //     playerMovedThisFrame = true;
-    //   }
-
-    //   if (this.cursors.up.isDown || this.WASD.W.isDown) {
-    //     velocityY = -speed;
-    //     this.facing = "up";
-    //     playerMovedThisFrame = true;
-    //   } else if (this.cursors.down.isDown || this.WASD.S.isDown) {
-    //     velocityY = speed;
-    //     this.facing = "down";
-    //     playerMovedThisFrame = true;
-    //   }
-    // }
-
     // Apply velocity if not in shift mode
     if (!this.shiftActive) {
       this.myBox.body.setVelocity(velocityX, velocityY);
 
       // Clamp the physics body's position to enforce boundaries
+      // myBox.body.x/y is the TOP-LEFT corner of the body.
+      // playerBounds.x/y is the TOP-LEFT corner of the bounds rectangle.
+      // playerBounds.width/height is the width/height of the bounds rectangle.
+
       this.myBox.body.x = Phaser.Math.Clamp(
         this.myBox.body.x,
-        this.playerBounds.x,
-        this.playerBounds.right - this.myBox.body.width
+        this.playerBounds.x, // Minimum X (left edge of bounds)
+        this.playerBounds.x + this.playerBounds.width - this.myBox.body.width // Maximum X (right edge of bounds - player width)
       );
       this.myBox.body.y = Phaser.Math.Clamp(
         this.myBox.body.y,
-        this.playerBounds.y,
-        this.playerBounds.bottom - this.myBox.body.height
+        this.playerBounds.y, // Minimum Y (top edge of bounds)
+        this.playerBounds.y + this.playerBounds.height - this.myBox.body.height // Maximum Y (bottom edge of bounds - player height)
       );
 
       // Sync the visual rectangle's center to the physics body's center
@@ -460,15 +508,19 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // --- tryHook and other ability methods are unchanged ---
   /**
    * Attempts to fire the Hook ability.
    */
   tryHook() {
     console.log("Attempting Hook...");
-    if (this.currentAbility || this.cooldowns.hook > this.time.now) {
+    // Prevent hook if currently "hooked"
+    if (
+      this.currentAbility === "hooked" ||
+      this.currentAbility ||
+      this.cooldowns.hook > this.time.now
+    ) {
       console.log(
-        `Hook on cooldown or another ability active. Cooldown: ${this.cooldowns.hook}, Current Time: ${this.time.now}`
+        `Hook on cooldown or another ability active. Cooldown: ${this.cooldowns.hook}, Current Ability: ${this.currentAbility}, Current Time: ${this.time.now}`
       );
       return;
     }
@@ -511,9 +563,14 @@ export class GameScene extends Phaser.Scene {
       console.warn("Cannot blink: myBox or playerBounds not initialized.");
       return;
     }
-    if (this.currentAbility || this.cooldowns.blink > this.time.now) {
+    // Prevent blink if currently "hooked"
+    if (
+      this.currentAbility === "hooked" ||
+      this.currentAbility ||
+      this.cooldowns.blink > this.time.now
+    ) {
       console.log(
-        `Blink on cooldown or another ability active. Cooldown: ${this.cooldowns.blink}, Current Time: ${this.time.now}`
+        `Blink on cooldown or another ability active. Cooldown: ${this.cooldowns.blink}, Current Ability: ${this.currentAbility}, Current Time: ${this.time.now}`
       );
       return;
     }
@@ -539,22 +596,22 @@ export class GameScene extends Phaser.Scene {
       case "up":
         dy = -distance;
         break;
-        break;
       case "down":
         dy = distance;
         break;
     }
 
     // Clamp new position within player's bounds
+    // Similar clamping logic as in update() to ensure player lands within bounds
     const newX = Phaser.Math.Clamp(
       this.myBox.x + dx,
-      this.playerBounds.x + this.myBox.width / 2,
-      this.playerBounds.right - this.myBox.width / 2
+      this.playerBounds.x + this.myBox.width / 2, // Min X (center)
+      this.playerBounds.x + this.playerBounds.width - this.myBox.width / 2 // Max X (center)
     );
     const newY = Phaser.Math.Clamp(
       this.myBox.y + dy,
-      this.playerBounds.y + this.myBox.height / 2,
-      this.playerBounds.bottom - this.myBox.height / 2
+      this.playerBounds.y + this.myBox.height / 2, // Min Y (center)
+      this.playerBounds.y + this.playerBounds.height - this.myBox.height / 2 // Max Y (center)
     );
 
     this.myBox.setPosition(newX, newY); // Update visual position
@@ -575,16 +632,20 @@ export class GameScene extends Phaser.Scene {
    */
   tryShift() {
     console.log("Attempting Shift...");
-    if (this.currentAbility || this.cooldowns.shift > this.time.now) {
+    // Prevent shift if currently "hooked"
+    if (
+      this.currentAbility === "hooked" ||
+      this.currentAbility ||
+      this.cooldowns.shift > this.time.now
+    ) {
       console.log(
-        `Shift on cooldown or another ability active. Cooldown: ${this.cooldowns.shift}, Current Time: ${this.time.now}`
+        `Shift on cooldown or another ability active. Cooldown: ${this.cooldowns.shift}, Current Ability: ${this.currentAbility}, Current Time: ${this.time.now}`
       );
       return;
     }
     this.currentAbility = "shift";
     console.log("currentAbility set to 'shift' in tryShift");
     this.cooldowns.shift = this.time.now + 5000; // 5-second cooldown
-    this.shiftActive = true; // Activate shift state
     this.highlightSkill("shift");
     this.showCooldown("shift", 5000);
     console.log("Shift activated!");
@@ -607,6 +668,16 @@ export class GameScene extends Phaser.Scene {
    */
   cancelAction() {
     console.log("Cancelling action...");
+    // If in "hooked" state, allow cancellation of the visual effect/state
+    if (this.currentAbility === "hooked") {
+      // We don't have a direct 'respawnTimer' in client anymore since server handles delay
+      // but we can still clear the visual countdown and make player visible if they pressed 'S'
+      this.respawnCountdownText.setVisible(false);
+      this.myBox.setVisible(true); // Ensure player is visible
+      this.currentAbility = null;
+      console.log("currentAbility cleared (Hooked state cancelled manually).");
+    }
+
     if (this.currentAbility === "shift") {
       if (this.shiftTimer) {
         this.shiftTimer.remove(false); // Stop the delayed call for shift end
@@ -643,7 +714,6 @@ export class GameScene extends Phaser.Scene {
       }); // Send final position to server
     }
     this.targetPosition = null; // Also clear mouse movement target
-    // Removed: this.isMouseDownForMovement = false; // Not needed anymore
   }
 
   /**
