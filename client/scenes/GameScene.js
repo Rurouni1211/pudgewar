@@ -47,6 +47,7 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard.on("keydown-R", this.tryBlink, this);
     this.input.keyboard.on("keydown-E", this.tryShift, this);
     this.input.keyboard.on("keydown-S", this.cancelAction, this); // 'S' for Cancel Action
+    this.targetPosition = null; // Mouse target position
 
     // Setup ability icons and their cooldown overlays/texts
     this.skillIcons = {
@@ -195,6 +196,10 @@ export class GameScene extends Phaser.Scene {
 
     this.highlightSkill(null); // Initialize skill icon states
     console.log("GameScene: create method finished.");
+
+    this.input.on("pointerdown", (pointer) => {
+      this.targetPosition = new Phaser.Math.Vector2(pointer.x, pointer.y);
+    });
   }
 
   /**
@@ -339,6 +344,62 @@ export class GameScene extends Phaser.Scene {
       this.cooldownTexts[key].setText(
         remaining >= 0 ? Math.ceil(remaining / 1000).toString() : "" // Display seconds remaining
       );
+    }
+
+    // Mouse-based movement
+    if (this.targetPosition && !this.shiftActive) {
+      const distance = Phaser.Math.Distance.Between(
+        this.myBox.x,
+        this.myBox.y,
+        this.targetPosition.x,
+        this.targetPosition.y
+      );
+
+      if (distance > 5) {
+        const angle = Phaser.Math.Angle.Between(
+          this.myBox.x,
+          this.myBox.y,
+          this.targetPosition.x,
+          this.targetPosition.y
+        );
+        const speed = 200;
+
+        const vx = Math.cos(angle) * speed;
+        const vy = Math.sin(angle) * speed;
+
+        this.myBox.body.setVelocity(vx, vy);
+
+        // Update facing direction for abilities
+        if (Math.abs(vx) > Math.abs(vy)) {
+          this.facing = vx > 0 ? "right" : "left";
+        } else {
+          this.facing = vy > 0 ? "down" : "up";
+        }
+      } else {
+        this.myBox.body.setVelocity(0, 0);
+        this.targetPosition = null; // Stop moving
+      }
+
+      // Clamp to player bounds
+      this.myBox.body.x = Phaser.Math.Clamp(
+        this.myBox.body.x,
+        this.playerBounds.x,
+        this.playerBounds.right - this.myBox.body.width
+      );
+      this.myBox.body.y = Phaser.Math.Clamp(
+        this.myBox.body.y,
+        this.playerBounds.y,
+        this.playerBounds.bottom - this.myBox.body.height
+      );
+
+      this.myBox.x = this.myBox.body.x + this.myBox.body.width / 2;
+      this.myBox.y = this.myBox.body.y + this.myBox.body.height / 2;
+
+      socket.emit("playerMove", {
+        id: socket.id,
+        x: this.myBox.x,
+        y: this.myBox.y,
+      });
     }
   }
 

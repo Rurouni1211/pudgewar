@@ -186,60 +186,80 @@ io.on("connection", (socket) => {
 
   socket.on("hookFired", ({ playerId, direction }) => {
     const room = socket.roomCode;
-    if (!room) {
-      console.log(`🚫 Hook fired by ${playerId} without a room.`);
-      return;
-    }
+    if (!room) return;
+
     const opponentId = rooms[room]?.find((id) => id !== playerId);
-    const pullToPlayer = players[playerId]; // Get player's full data
-    if (!opponentId || !pullToPlayer || !pullToPlayer.lastPosition) {
-      console.log(
-        `⚠️ Hook fired by ${playerId}, but opponent or pullTo position missing.`
-      );
-      return;
-    }
-
-    players[playerId].score = (players[playerId].score || 0) + 1;
-    console.log(
-      `🎣 Hook by ${playerId} on ${opponentId}. ${playerId} score: ${players[playerId].score}`
-    );
-
-    io.to(room).emit("hookHit", {
-      by: playerId,
-      target: opponentId,
-      pullTo: pullToPlayer.lastPosition, // Use the server's last known position
-    });
-
+    const player = players[playerId];
     const opponent = players[opponentId];
-    if (!opponent || !opponent.bounds) {
-      console.warn(
-        `Opponent ${opponentId} or their bounds not found for respawn.`
-      );
+
+    if (!player || !opponent || !player.lastPosition || !opponent.lastPosition)
       return;
+
+    // Hook tip position (client just gives direction)
+    const hookLength = 150;
+    let dx = 0,
+      dy = 0;
+    switch (direction) {
+      case "left":
+        dx = -hookLength;
+        break;
+      case "right":
+        dx = hookLength;
+        break;
+      case "up":
+        dy = -hookLength;
+        break;
+      case "down":
+        dy = hookLength;
+        break;
     }
 
-    // Respawn within opponent's OWN boundaries
-    const respawnX =
-      Math.floor(Math.random() * (opponent.bounds.width - PLAYER_SIZE)) +
-      opponent.bounds.x +
-      PLAYER_SIZE / 2;
-    const respawnY =
-      Math.floor(Math.random() * (opponent.bounds.height - PLAYER_SIZE)) +
-      opponent.bounds.y +
-      PLAYER_SIZE / 2;
+    const hookTip = {
+      x: player.lastPosition.x + dx,
+      y: player.lastPosition.y + dy,
+    };
 
-    opponent.lastPosition = { x: respawnX, y: respawnY };
-    console.log(
-      `♻️ Opponent ${opponentId} respawned at (${respawnX}, ${respawnY}) in their bounds [${
-        opponent.bounds.y
-      }, ${opponent.bounds.y + opponent.bounds.height}]`
-    );
+    const oppPos = opponent.lastPosition;
+    const oppSize = 32; // same as client (32x32)
+    const oppBounds = {
+      left: oppPos.x - oppSize / 2,
+      right: oppPos.x + oppSize / 2,
+      top: oppPos.y - oppSize / 2,
+      bottom: oppPos.y + oppSize / 2,
+    };
 
-    io.to(opponentId).emit("respawn", {
-      x: respawnX,
-      y: respawnY,
-      target: opponentId,
-    });
+    const hit =
+      hookTip.x >= oppBounds.left &&
+      hookTip.x <= oppBounds.right &&
+      hookTip.y >= oppBounds.top &&
+      hookTip.y <= oppBounds.bottom;
+
+    if (hit) {
+      // Success: emit hookHit and respawn
+      io.to(room).emit("hookHit", {
+        by: playerId,
+        target: opponentId,
+        pullTo: player.lastPosition,
+      });
+
+      // Respawn logic as before
+      const respawnX =
+        Math.random() * (opponent.bounds.width - 32) + opponent.bounds.x + 16;
+      const respawnY =
+        Math.random() * (opponent.bounds.height - 32) + opponent.bounds.y + 16;
+      opponent.lastPosition = { x: respawnX, y: respawnY };
+
+      io.to(opponentId).emit("respawn", {
+        x: respawnX,
+        y: respawnY,
+        target: opponentId,
+      });
+
+      console.log(`🎯 Hook hit! ${playerId} pulled ${opponentId}`);
+    } else {
+      console.log(`❌ Hook missed by ${playerId}`);
+      // Optionally emit a "hookMiss" event to client
+    }
   });
 
   socket.on("blinkFired", ({ playerId, newX, newY }) => {
