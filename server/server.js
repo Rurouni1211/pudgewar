@@ -397,6 +397,11 @@ io.on("connection", (socket) => {
         // Set opponent's status to respawning to prevent further hooks/movement
         opponent.isRespawning = true;
         // The client-side will start visual countdown upon receiving 'hookHit'
+        // Broadcast countdown to both players so both can display the countdown
+        // Only send countdown to the player who got hooked (not to everyone)
+        io.to(opponentId).emit("startRespawnCountdown", {
+          target: opponentId,
+        });
 
         // --- NEW: Add a delay before sending the actual respawn command to the target ---
         setTimeout(() => {

@@ -295,6 +295,22 @@ export class GameScene extends Phaser.Scene {
         console.log("Player respawned and visible.");
       }
     });
+    socket.on("startRespawnCountdown", ({ target }) => {
+      if (target === socket.id) {
+        this.myBox.setVisible(false); // Hide if you're the one getting respawned
+      }
+
+      // Show countdown on screen regardless of whether it's you or the opponent
+      this.respawnCountdownText.setVisible(true).setText("2");
+
+      this.time.delayedCall(1000, () => {
+        this.respawnCountdownText.setText("1");
+      });
+
+      this.time.delayedCall(2000, () => {
+        this.respawnCountdownText.setVisible(false);
+      });
+    });
 
     socket.on("blinkEffect", ({ playerId, newX, newY }) => {
       console.log(
