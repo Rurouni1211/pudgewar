@@ -20,7 +20,7 @@ const config = {
   backgroundColor: "#87CEEB",
   physics: {
     default: "arcade",
-    arcade: { gravity: { y: 0 }, debug: true },
+    arcade: { gravity: { y: 0 }, debug: false },
   },
   scene: [BootScene, TitleScene, LobbyScene, GameScene], // LobbyScene is now the first scene
 };

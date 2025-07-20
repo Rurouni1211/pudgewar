@@ -37,6 +37,9 @@ const HOOK_CHECK_INTERVAL = 25; // How often to check for collision during hook 
 // Respawn Delay (Server-Side)
 const RESPAWN_DELAY_MS = 2000; // 2 seconds
 
+// --- NEW GAME WINNING CONDITION ---
+const WINNING_SCORE = 2; // Player needs to score 2 points to win
+
 /**
  * Checks if a point (px, py) is inside a rectangle.
  * @param {number} px
@@ -382,6 +385,13 @@ io.on("connection", (socket) => {
     const room = socket.roomCode;
     if (!room) return;
 
+    // Check if the game is already over in this room
+    if (rooms[room] && rooms[room].gameOver) {
+      console.log(`🚫 Game already over in room ${room}. Hook ignored.`);
+      io.to(playerId).emit("hookMiss", playerId); // Inform the player their hook missed as the game is over
+      return;
+    }
+
     const player = players[playerId];
     if (!player || !player.lastPosition) {
       console.log("Hook fired with missing player data (caster).");
@@ -412,6 +422,14 @@ io.on("connection", (socket) => {
 
     let currentHookLength = 0;
     const hookInterval = setInterval(() => {
+      // Re-check game over status inside interval to stop early if needed
+      if (rooms[room] && rooms[room].gameOver) {
+        clearInterval(hookInterval);
+        console.log(`🚫 Game ended during hook in room ${room}. Hook aborted.`);
+        io.to(playerId).emit("hookMiss", playerId);
+        return;
+      }
+
       currentHookLength += (HOOK_SPEED * HOOK_CHECK_INTERVAL) / 1000;
 
       if (currentHookLength > HOOK_LEN) {
@@ -462,7 +480,33 @@ io.on("connection", (socket) => {
             score: players[playerId].score,
           });
 
-          // Set opponent's status to respawning
+          // --- WINNING LOGIC CHECK ---
+          if (
+            players[playerId].score >= WINNING_SCORE &&
+            rooms[room].length === 4
+          ) {
+            // Only check for win if there are 4 players
+            rooms[room].gameOver = true; // Set game over flag for the room
+            io.to(room).emit("gameOver", {
+              winnerId: playerId,
+              winnerName: players[playerId].name,
+            });
+            console.log(`🏆 Player ${playerId} won the game in room ${room}!`);
+
+            // Optionally, reset game state or remove room after a short delay
+            setTimeout(() => {
+              io.to(room).emit("gameReset"); // Tell clients to go back to lobby or reset
+              // Clear players and room data after game over
+              rooms[room].forEach((id) => {
+                if (players[id]) delete players[id];
+              });
+              delete rooms[room];
+              console.log(`♻️ Game state for room ${room} reset.`);
+            }, 5000); // 5 seconds after game over
+            return; // Stop further processing as game is over
+          }
+
+          // Set opponent's status to respawning if game isn't over
           players[hookedId].isRespawning = true;
           io.to(hookedId).emit("startRespawnCountdown", { target: hookedId });
 
@@ -510,6 +554,12 @@ io.on("connection", (socket) => {
       console.log(`🚫 Blink fired by ${playerId} without a room.`);
       return;
     }
+    // Prevent blink if game is over
+    if (rooms[room] && rooms[room].gameOver) {
+      console.log(`🚫 Game already over in room ${room}. Blink ignored.`);
+      return;
+    }
+
     const player = players[playerId];
     if (player && player.bounds && !player.isRespawning) {
       // Incoming newX, newY are sprite centers. Convert to top-left for clamping.
@@ -552,6 +602,12 @@ io.on("connection", (socket) => {
       console.log(`🚫 Shift fired by ${playerId} without a room.`);
       return;
     }
+    // Prevent shift if game is over
+    if (rooms[room] && rooms[room].gameOver) {
+      console.log(`🚫 Game already over in room ${room}. Shift ignored.`);
+      return;
+    }
+
     const player = players[playerId];
     if (player && !player.isRespawning) {
       console.log(`👻 Player ${playerId} activated Shift.`);
@@ -577,31 +633,45 @@ io.on("connection", (socket) => {
     console.log(`🔌 User disconnected: ${socket.id}`);
     const room = socket.roomCode;
     if (room && rooms[room]) {
-      rooms[room] = rooms[room].filter((id) => id !== socket.id);
-      console.log(
-        `➖ User ${socket.id} left room ${room}. Remaining: ${rooms[room].length}`
-      );
-
-      if (rooms[room].length === 0) {
-        delete rooms[room];
-        console.log(`🗑️ Room ${room} is empty and deleted.`);
-      } else {
-        const playerList = rooms[room].map((id) => ({
-          id,
-          name: players[id]?.name || id,
-        }));
-        io.to(room).emit("updatePlayerList", playerList);
-
-        if (rooms[room].length < 4 && rooms[room].length > 0) {
-          io.to(room).emit(
-            "opponentDisconnected",
-            `An opponent has disconnected. Game ended for room ${room}.`
-          );
-          rooms[room].forEach((id) => {
-            delete players[id];
-          });
+      // If the game is already over in this room, just remove the player
+      if (rooms[room].gameOver) {
+        rooms[room] = rooms[room].filter((id) => id !== socket.id);
+        console.log(
+          `➖ User ${socket.id} disconnected from finished room ${room}. Remaining: ${rooms[room].length}`
+        );
+        if (rooms[room].length === 0) {
           delete rooms[room];
-          console.log(`💔 Game ended in room ${room} due to disconnect.`);
+          console.log(`🗑️ Room ${room} is empty and deleted.`);
+        }
+      } else {
+        rooms[room] = rooms[room].filter((id) => id !== socket.id);
+        console.log(
+          `➖ User ${socket.id} left room ${room}. Remaining: ${rooms[room].length}`
+        );
+
+        if (rooms[room].length === 0) {
+          delete rooms[room];
+          console.log(`🗑️ Room ${room} is empty and deleted.`);
+        } else {
+          const playerList = rooms[room].map((id) => ({
+            id,
+            name: players[id]?.name || id,
+          }));
+          io.to(room).emit("updatePlayerList", playerList);
+
+          // If a player disconnects and less than 4 players remain, end the game
+          if (rooms[room].length < 4 && rooms[room].length > 0) {
+            rooms[room].gameOver = true; // Set game over flag
+            io.to(room).emit(
+              "opponentDisconnected",
+              `An opponent has disconnected. Game ended for room ${room}.`
+            );
+            rooms[room].forEach((id) => {
+              delete players[id];
+            });
+            delete rooms[room];
+            console.log(`💔 Game ended in room ${room} due to disconnect.`);
+          }
         }
       }
     }

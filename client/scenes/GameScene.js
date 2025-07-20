@@ -23,9 +23,11 @@ export class GameScene extends Phaser.Scene {
     this.respawnCountdownText = null; // New: For displaying countdown
 
     this.myScore = 0;
-    this.opponentScore = 0; // This will likely need to be an object for multiple opponents
+    this.playerScores = {}; // Use an object to store all player scores { playerId: score, ... }
     this.myScoreText = null;
-    this.opponentScoreText = null; // This will also need to be dynamic for multiple opponents
+    this.scoreTexts = {}; // To manage multiple score displays on the UI
+
+    this.gameOverText = null; // New: To display game over message
   }
 
   preload() {
@@ -50,7 +52,7 @@ export class GameScene extends Phaser.Scene {
       .setDisplaySize(this.game.config.width, this.game.config.height)
       .setDepth(-100);
 
-    socket.removeAllListeners();
+    socket.removeAllListeners(); // Clear existing listeners to prevent duplicates
     this.anims.create({
       key: "butcher_idle",
       frames: [{ key: "butcher", frame: 0 }],
@@ -110,8 +112,12 @@ export class GameScene extends Phaser.Scene {
 
     // --- NEW MOUSE MOVEMENT LOGIC (Click-to-Move) ---
     this.input.on("pointerdown", (pointer) => {
-      // Only respond to left-click for movement and if no ability is active
-      if (!this.currentAbility && pointer.leftButtonDown()) {
+      // Only respond to left-click for movement and if no ability is active or game is not over
+      if (
+        !this.currentAbility &&
+        pointer.leftButtonDown() &&
+        !this.isGameOver
+      ) {
         this.targetPosition = new Phaser.Math.Vector2(pointer.x, pointer.y);
         // Immediately stop keyboard movement if a new mouse target is set
         this.myBox.body.setVelocity(0, 0);
@@ -177,25 +183,16 @@ export class GameScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setDepth(12),
     };
-    this.myScoreText = this.add
-      .text(16, 16, "My Score: 0", {
+
+    // Initialize all player score texts
+    this.scoreTexts[socket.id] = this.add
+      .text(16, 16, `My Score: 0`, {
         font: "24px Arial",
         fill: "#ffffff",
         stroke: "#000000",
         strokeThickness: 4,
       })
       .setDepth(100);
-
-    // Opponent score text - this will need to be dynamic for multiple players
-    // this.opponentScoreText = this.add
-    //   .text(this.game.config.width - 16, 16, "Opponent Score: 0", {
-    //     font: "24px Arial",
-    //     fill: "#ffffff",
-    //     stroke: "#000000",
-    //     strokeThickness: 4,
-    //   })
-    //   .setOrigin(1, 0) // Align to top-right
-    //   .setDepth(100);
 
     // Respawn countdown text setup
     this.respawnCountdownText = this.add
@@ -208,6 +205,19 @@ export class GameScene extends Phaser.Scene {
       })
       .setOrigin(0.5)
       .setDepth(20)
+      .setVisible(false);
+
+    // Game Over Text
+    this.gameOverText = this.add
+      .text(this.game.config.width / 2, this.game.config.height / 2, "", {
+        font: "60px Arial",
+        fontStyle: "bold",
+        fill: "#ff0000",
+        stroke: "#000000",
+        strokeThickness: 8,
+      })
+      .setOrigin(0.5)
+      .setDepth(100)
       .setVisible(false);
 
     // This line draws a white line at y=300 for visual debugging or reference.
@@ -317,22 +327,24 @@ export class GameScene extends Phaser.Scene {
     );
 
     socket.on("scoreUpdated", ({ playerId, score }) => {
-      // You will need to manage scores for multiple players more robustly
-      // For now, assuming opponentId is still set for a "main" opponent or if only two players
+      // Update the score for the specific player
+      this.playerScores[playerId] = score;
+
+      // Update the display text for that player.
+      // You might need a more sophisticated UI for multiple scores,
+      // e.g., iterating through this.scoreTexts or specific positions for each.
       if (playerId === socket.id) {
-        this.myScore = score;
-        this.myScoreText.setText(`My Score: ${this.myScore}`);
+        this.myScore = score; // Keep myScore for convenience
+        this.scoreTexts[playerId].setText(`My Score: ${score}`);
         console.log(`My score updated to: ${this.myScore}`);
-      } //else if (this.otherPlayers[playerId]) {
-      //   // Check if it's one of the other players
-      //   // If you have a dedicated opponent score display, you'd update that specific one
-      //   // For a multi-player game, you'd likely display all player scores
-      //   this.opponentScore = score; // This might be misleading if you have many opponents
-      //   this.opponentScoreText.setText(`Opponent Score: ${this.opponentScore}`); // Adjust this for multi-player
-      //   console.log(
-      //     `Opponent ${playerId} score updated to: ${this.opponentScore}`
-      //   );
-      // }
+      } else if (this.scoreTexts[playerId]) {
+        this.scoreTexts[playerId].setText(
+          `P${
+            Object.keys(this.otherPlayers).indexOf(playerId) + 1
+          } Score: ${score}`
+        );
+        console.log(`Player ${playerId} score updated to: ${score}`);
+      }
     });
 
     socket.on("hookHit", ({ by, target, pullTo }) => {
@@ -361,8 +373,8 @@ export class GameScene extends Phaser.Scene {
             y: pullTo.y - 40,
             duration: 300,
             // onComplete: () => {
-            //   // ✅ Restore full opacity after pull
-            //   hookedPlayerSprite.setAlpha(1);
+            //   // ✅ Restore full opacity after pull
+            //   hookedPlayerSprite.setAlpha(1);
             // },
           });
         }
@@ -487,9 +499,36 @@ export class GameScene extends Phaser.Scene {
     socket.on("opponentDisconnected", (message) => {
       console.warn(`💔 Opponent disconnected: ${message}`);
       alert(message);
-      // You might want to clean up the disconnected player's sprite here
-      // before transitioning back to the lobby, or based on the message.
+      // Clean up all players and go back to lobby
+      this.cleanupGame();
       this.scene.start("LobbyScene");
+    });
+
+    // --- NEW: Game Over Listener ---
+    socket.on("gameOver", ({ winnerId, winnerName }) => {
+      console.log(`🎉 Game Over! Winner: ${winnerName} (${winnerId})`);
+      this.isGameOver = true; // Set a flag to disable further gameplay
+      this.myBox.body.setVelocity(0, 0); // Stop player movement
+      this.gameOverText.setText(`${winnerName} Wins!`).setVisible(true);
+
+      // Disable all controls
+      this.input.keyboard.enabled = false;
+      this.input.mouse.enabled = false;
+      this.currentAbility = "gameOver"; // Prevent any abilities
+
+      // Fade out all player sprites (optional, but good for visual feedback)
+      this.tweens.add({
+        targets: [this.myBox, ...Object.values(this.otherPlayers)],
+        alpha: 0.2,
+        duration: 1000,
+        ease: "Linear",
+      });
+    });
+
+    socket.on("gameReset", () => {
+      console.log("Game reset received. Returning to lobby.");
+      this.cleanupGame(); // Clean up all game objects
+      this.scene.start("LobbyScene"); // Transition to Lobby Scene
     });
 
     this.highlightSkill(null);
@@ -504,6 +543,19 @@ export class GameScene extends Phaser.Scene {
     }
 
     console.log(`GameScene Setup: My ID: ${socket.id}`);
+    this.isGameOver = false; // Reset game over flag
+    this.gameOverText.setVisible(false); // Hide game over text
+
+    // Clear any previous players/scores from a prior game
+    for (const id in this.otherPlayers) {
+      this.otherPlayers[id].destroy();
+      delete this.otherPlayers[id];
+    }
+    for (const id in this.scoreTexts) {
+      this.scoreTexts[id].destroy();
+      delete this.scoreTexts[id];
+    }
+    this.playerScores = {}; // Reset all scores
 
     const gameHeight = this.game.config.height;
     const gameWidth = this.game.config.width;
@@ -513,7 +565,11 @@ export class GameScene extends Phaser.Scene {
     const riverVisualBottom = 380;
     // --- END CRITICAL CONSTANTS ---
 
-    players.forEach((playerId) => {
+    let scoreDisplayY = 16; // Starting Y position for scores
+    const scoreDisplayXOffset = gameWidth - 16; // For right-aligned scores
+    const scoreDisplayLineHeight = 30; // Vertical space between scores
+
+    players.forEach((playerId, index) => {
       const playerSpawn = positions[playerId];
       if (!playerSpawn) {
         console.warn(`No spawn position found for player ID: ${playerId}`);
@@ -526,6 +582,9 @@ export class GameScene extends Phaser.Scene {
           `GameScene Setup: Setting myBox position to (${playerSpawn.x}, ${playerSpawn.y})`
         );
         this.myBox.setPosition(playerSpawn.x, playerSpawn.y);
+        this.myBox.setVisible(true); // Ensure my player is visible
+        this.myBox.setAlpha(1); // Ensure my player is full alpha
+        this.myBox.play("butcher_idle"); // Start with idle animation
 
         this.isTopPlayer = playerSpawn.y < gameHeight / 2;
 
@@ -549,6 +608,15 @@ export class GameScene extends Phaser.Scene {
             this.isTopPlayer ? "TOP" : "BOTTOM"
           } player. Bounds: ${JSON.stringify(this.playerBounds)}`
         );
+        // My score is always top-left
+        this.scoreTexts[playerId] = this.add
+          .text(16, 16, `My Score: 0`, {
+            font: "24px Arial",
+            fill: "#ffffff",
+            stroke: "#000000",
+            strokeThickness: 4,
+          })
+          .setDepth(100);
       } else {
         // This is an opponent
         console.log(
@@ -560,7 +628,25 @@ export class GameScene extends Phaser.Scene {
         opponentSprite.setScale(2, 2);
         opponentSprite.play("butcher_idle");
         this.otherPlayers[playerId] = opponentSprite; // Store the opponent sprite
+
+        // Place opponent scores, for example, on the right side of the screen
+        this.scoreTexts[playerId] = this.add
+          .text(
+            scoreDisplayXOffset,
+            scoreDisplayY + index * scoreDisplayLineHeight,
+            `P${index} Score: 0`,
+            {
+              // P1, P2, P3 etc
+              font: "24px Arial",
+              fill: "#ffffff",
+              stroke: "#000000",
+              strokeThickness: 4,
+            }
+          )
+          .setOrigin(1, 0) // Align to top-right
+          .setDepth(100);
       }
+      this.playerScores[playerId] = 0; // Initialize score for all players
     });
 
     console.log("GameScene Setup: Initial game setup complete.");
@@ -570,6 +656,14 @@ export class GameScene extends Phaser.Scene {
    * Phaser's update loop, runs every frame. Handles player movement and cooldowns.
    */
   update() {
+    // Prevent any action if game is over
+    if (this.isGameOver) {
+      if (this.myBox?.body && this.myBox.body.speed > 0) {
+        this.myBox.body.setVelocity(0, 0);
+      }
+      return;
+    }
+
     // Only allow movement if myBox/playerBounds are ready, and player is not hooked
     if (
       !this.myBox?.body ||
@@ -694,8 +788,9 @@ export class GameScene extends Phaser.Scene {
    */
   tryHook() {
     console.log("Attempting Hook...");
-    // Prevent hook if currently "hooked"
+    // Prevent hook if currently "hooked" or game is over
     if (
+      this.isGameOver ||
       this.currentAbility === "hooked" ||
       this.currentAbility ||
       this.cooldowns.hook > this.time.now
@@ -744,8 +839,9 @@ export class GameScene extends Phaser.Scene {
       console.warn("Cannot blink: myBox or playerBounds not initialized.");
       return;
     }
-    // Prevent blink if currently "hooked"
+    // Prevent blink if currently "hooked" or game is over
     if (
+      this.isGameOver ||
       this.currentAbility === "hooked" ||
       this.currentAbility ||
       this.cooldowns.blink > this.time.now
@@ -813,8 +909,9 @@ export class GameScene extends Phaser.Scene {
    */
   tryShift() {
     console.log("Attempting Shift...");
-    // Prevent shift if currently "hooked"
+    // Prevent shift if currently "hooked" or game is over
     if (
+      this.isGameOver ||
       this.currentAbility === "hooked" ||
       this.currentAbility ||
       this.cooldowns.shift > this.time.now
@@ -849,6 +946,12 @@ export class GameScene extends Phaser.Scene {
    */
   cancelAction() {
     console.log("Cancelling action...");
+    // If game is over, prevent any cancellation
+    if (this.isGameOver) {
+      console.log("Game is over, cannot cancel action.");
+      return;
+    }
+
     // If in "hooked" state, allow cancellation of the visual effect/state
     if (this.currentAbility === "hooked") {
       this.respawnCountdownText.setVisible(false);
@@ -930,5 +1033,62 @@ export class GameScene extends Phaser.Scene {
       }
       console.log(`${skillName} cooldown ended.`);
     });
+  }
+
+  /**
+   * Cleans up all dynamic game objects and resets state when leaving the scene.
+   */
+  cleanupGame() {
+    console.log("Cleaning up GameScene...");
+    // Destroy player sprites
+    if (this.myBox) {
+      this.myBox.destroy();
+      this.myBox = null;
+    }
+    for (const id in this.otherPlayers) {
+      if (this.otherPlayers[id]) {
+        this.otherPlayers[id].destroy();
+      }
+    }
+    this.otherPlayers = {};
+
+    // Destroy score texts
+    for (const id in this.scoreTexts) {
+      if (this.scoreTexts[id]) {
+        this.scoreTexts[id].destroy();
+      }
+    }
+    this.scoreTexts = {};
+    this.playerScores = {};
+
+    // Destroy hook line and tween if active
+    if (this.activeHookLine) {
+      this.activeHookLine.destroy();
+      this.activeHookLine = null;
+    }
+    if (this.hookTween) {
+      this.hookTween.stop();
+      this.hookTween = null;
+    }
+
+    // Stop any active timers (e.g., shift timer)
+    if (this.shiftTimer) {
+      this.shiftTimer.remove(false);
+      this.shiftTimer = null;
+    }
+
+    // Hide and clear UI elements
+    this.respawnCountdownText.setVisible(false).setText("");
+    this.gameOverText.setVisible(false).setText("");
+
+    // Re-enable input if it was disabled (e.g., by game over)
+    this.input.keyboard.enabled = true;
+    this.input.mouse.enabled = true;
+
+    // Reset game state flags
+    this.isGameOver = false;
+    this.currentAbility = null;
+
+    console.log("GameScene cleanup complete.");
   }
 }
