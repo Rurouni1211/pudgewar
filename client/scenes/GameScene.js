@@ -21,6 +21,8 @@ export class GameScene extends Phaser.Scene {
     this.activeHookLine = null;
     this.hookTween = null;
     this.respawnCountdownText = null; // New: For displaying countdown
+
+    
   }
 
   preload() {
@@ -29,6 +31,11 @@ export class GameScene extends Phaser.Scene {
     this.load.image("blinkIcon", "assets/blink.png");
     this.load.image("shiftIcon", "assets/shift.png");
     this.load.image("bg", "assets/background.png");
+    this.load.spritesheet("butcher", "assets/butchers.png", {
+      frameWidth: 24,
+      frameHeight: 32,
+    });
+
     console.log("GameScene: Assets preloaded.");
   }
 
@@ -41,9 +48,51 @@ export class GameScene extends Phaser.Scene {
       .setDepth(-100);
 
     socket.removeAllListeners();
+    this.anims.create({
+      key: "butcher_idle",
+      frames: [{ key: "butcher", frame: 0 }],
+      frameRate: 1,
+      repeat: -1,
+    });
 
-    this.myBox = this.add.rectangle(0, 0, 32, 32, 0x00ff00).setDepth(5);
-    this.enemyBox = this.add.rectangle(0, 0, 32, 32, 0xff0000).setDepth(5);
+    this.anims.create({
+      key: "butcher_walk_down",
+      frames: this.anims.generateFrameNumbers("butcher", { start: 0, end: 3 }),
+      frameRate: 6,
+      repeat: -1,
+    });
+
+    this.anims.create({
+      key: "butcher_walk_left",
+      frames: this.anims.generateFrameNumbers("butcher", { start: 4, end: 7 }),
+      frameRate: 6,
+      repeat: -1,
+    });
+
+    this.anims.create({
+      key: "butcher_walk_right",
+      frames: this.anims.generateFrameNumbers("butcher", { start: 4, end: 7 }), // reuse left frames or mirror via flipX
+      frameRate: 6,
+      repeat: -1,
+    });
+
+    this.anims.create({
+      key: "butcher_walk_up",
+      frames: this.anims.generateFrameNumbers("butcher", { start: 8, end: 11 }),
+      frameRate: 6,
+      repeat: -1,
+    });
+    this.myBox = this.add.sprite(0, 0, "butcher").setDepth(5);
+
+    this.myBox.setScale(2, 2); // width × height scale
+
+    this.myBox.play("butcher_idle"); // Start with idle animation
+
+    this.enemyBox = this.add.sprite(0, 0, "butcher").setDepth(5);
+
+    this.enemyBox.setScale(2, 2);
+
+    this.enemyBox.play("butcher_idle");
 
     // Add physics body AFTER setting initial position. This is critical for movement.
     this.physics.add.existing(this.myBox);
@@ -84,6 +133,7 @@ export class GameScene extends Phaser.Scene {
       blink: this.add.image(120, 550, "blinkIcon").setScale(0.5).setDepth(10),
       shift: this.add.image(190, 550, "shiftIcon").setScale(0.5).setDepth(10),
     };
+
     this.cooldownOverlays = {
       hook: this.add
         .rectangle(50, 550, 64, 64, 0x000000, 0.6)
@@ -170,7 +220,42 @@ export class GameScene extends Phaser.Scene {
 
     // --- Socket Listeners ---
     socket.on("playerMove", ({ id, x, y }) => {
-      if (id !== socket.id) this.enemyBox.setPosition(x, y);
+      if (id !== socket.id) {
+        const oldX = this.enemyBox.x;
+        const oldY = this.enemyBox.y;
+
+        // Always update the opponent's position for accuracy
+        this.enemyBox.setPosition(x, y);
+
+        const dx = x - oldX;
+        const dy = y - oldY;
+        const distanceTraveled = Phaser.Math.Distance.Between(x, y, oldX, oldY);
+
+        // Define a threshold for "significant" movement
+        // Only play walking animation if the opponent moved beyond this threshold
+        const movementThreshold = 5; // Increased from 2 to 5 (you can experiment with this)
+
+        if (distanceTraveled > movementThreshold) {
+          // Animate movement if a significant distance was covered
+          if (Math.abs(dx) > Math.abs(dy)) {
+            // Determine facing direction and apply flip for horizontal movement
+            this.enemyBox.setFlipX(dx < 0); // Flip for right movement (if walk_left is base)
+            this.enemyBox.play("butcher_walk_left", true); // Reuse left frames for horizontal
+          } else {
+            // Vertical movement
+            this.enemyBox.setFlipX(false); // Reset flip for vertical movement
+            this.enemyBox.play(
+              dy > 0 ? "butcher_walk_down" : "butcher_walk_up",
+              true
+            );
+          }
+        } else {
+          // If not moving significantly, ensure the idle animation is playing
+          if (this.enemyBox.anims.currentAnim?.key !== "butcher_idle") {
+            this.enemyBox.play("butcher_idle", true);
+          }
+        }
+      }
     });
 
     socket.on(
@@ -474,6 +559,20 @@ export class GameScene extends Phaser.Scene {
         velocityY = 0;
         playerMovedThisFrame = true; // Still counts as a "movement" to stop
       }
+    }
+    if (velocityX === 0 && velocityY === 0) {
+      this.myBox.play("butcher_idle", true);
+    } else if (Math.abs(velocityX) > Math.abs(velocityY)) {
+      // Horizontal movement
+      this.myBox.setFlipX(velocityX > 0); // ✅ flip when moving right
+      this.myBox.play("butcher_walk_left", true); // use only walk_left animation
+    } else {
+      // Vertical movement
+      this.myBox.setFlipX(false); // reset flip
+      this.myBox.play(
+        velocityY > 0 ? "butcher_walk_down" : "butcher_walk_up",
+        true
+      );
     }
 
     // Apply velocity if not in shift mode
