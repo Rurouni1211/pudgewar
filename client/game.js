@@ -1,6 +1,7 @@
 // game.js
 import { GameScene } from "./scenes/GameScene.js";
 import { LobbyScene } from "./scenes/LobbyScene.js"; // Import your new lobby scene
+import { io } from "https://cdn.socket.io/4.7.2/socket.io.esm.min.js";
 
 const SERVER_URL = "https://pudgewar.onrender.com";
 export const socket = io(SERVER_URL); // Ensure socket is initialized once and exported

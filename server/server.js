@@ -3,7 +3,7 @@ const http = require("http");
 const app = express();
 const server = http.createServer(app);
 const { Server } = require("socket.io");
-const io = require("socket.io")(http, {
+const io = require("socket.io")(server, {
   cors: {
     origin: "https://pudge-war.netlify.app", // ✅ allow Netlify frontend
     methods: ["GET", "POST"],
