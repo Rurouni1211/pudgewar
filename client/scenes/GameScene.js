@@ -187,15 +187,15 @@ export class GameScene extends Phaser.Scene {
       .setDepth(100);
 
     // Opponent score text - this will need to be dynamic for multiple players
-    this.opponentScoreText = this.add
-      .text(this.game.config.width - 16, 16, "Opponent Score: 0", {
-        font: "24px Arial",
-        fill: "#ffffff",
-        stroke: "#000000",
-        strokeThickness: 4,
-      })
-      .setOrigin(1, 0) // Align to top-right
-      .setDepth(100);
+    // this.opponentScoreText = this.add
+    //   .text(this.game.config.width - 16, 16, "Opponent Score: 0", {
+    //     font: "24px Arial",
+    //     fill: "#ffffff",
+    //     stroke: "#000000",
+    //     strokeThickness: 4,
+    //   })
+    //   .setOrigin(1, 0) // Align to top-right
+    //   .setDepth(100);
 
     // Respawn countdown text setup
     this.respawnCountdownText = this.add
@@ -323,16 +323,16 @@ export class GameScene extends Phaser.Scene {
         this.myScore = score;
         this.myScoreText.setText(`My Score: ${this.myScore}`);
         console.log(`My score updated to: ${this.myScore}`);
-      } else if (this.otherPlayers[playerId]) {
-        // Check if it's one of the other players
-        // If you have a dedicated opponent score display, you'd update that specific one
-        // For a multi-player game, you'd likely display all player scores
-        this.opponentScore = score; // This might be misleading if you have many opponents
-        this.opponentScoreText.setText(`Opponent Score: ${this.opponentScore}`); // Adjust this for multi-player
-        console.log(
-          `Opponent ${playerId} score updated to: ${this.opponentScore}`
-        );
-      }
+      } //else if (this.otherPlayers[playerId]) {
+      //   // Check if it's one of the other players
+      //   // If you have a dedicated opponent score display, you'd update that specific one
+      //   // For a multi-player game, you'd likely display all player scores
+      //   this.opponentScore = score; // This might be misleading if you have many opponents
+      //   this.opponentScoreText.setText(`Opponent Score: ${this.opponentScore}`); // Adjust this for multi-player
+      //   console.log(
+      //     `Opponent ${playerId} score updated to: ${this.opponentScore}`
+      //   );
+      // }
     });
 
     socket.on("hookHit", ({ by, target, pullTo }) => {
@@ -352,11 +352,18 @@ export class GameScene extends Phaser.Scene {
         // I hooked someone
         const hookedPlayerSprite = this.otherPlayers[target];
         if (hookedPlayerSprite) {
+          // ✅ Dim the player (make semi-transparent)
+          hookedPlayerSprite.setAlpha(0.5);
+
           this.tweens.add({
-            targets: hookedPlayerSprite, // Target the specific hooked player sprite
+            targets: hookedPlayerSprite,
             x: pullTo.x,
-            y: pullTo.y - 40, // Adjust pullTo Y if needed for visual effect
+            y: pullTo.y - 40,
             duration: 300,
+            // onComplete: () => {
+            //   // ✅ Restore full opacity after pull
+            //   hookedPlayerSprite.setAlpha(1);
+            // },
           });
         }
         this.currentAbility = null;
@@ -437,7 +444,8 @@ export class GameScene extends Phaser.Scene {
         const respawnedPlayer = this.otherPlayers[target];
         if (respawnedPlayer) {
           respawnedPlayer.setPosition(x, y);
-          respawnedPlayer.setVisible(true); // Make opponent visible
+          respawnedPlayer.setVisible(true);
+          respawnedPlayer.setAlpha(1); // ✅ Fully visible again after respawn
           console.log(`Opponent ${target} respawned and visible.`);
         }
       }
