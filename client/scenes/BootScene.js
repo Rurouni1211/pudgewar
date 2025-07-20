@@ -8,6 +8,6 @@ export class BootScene extends Phaser.Scene {
   }
 
   create() {
-    this.scene.start("GameScene"); // ✅ Go directly to GameScene
+    this.scene.start("TitleScene"); // ✅ Go directly to GameScene
   }
 }

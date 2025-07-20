@@ -6,8 +6,8 @@ export class GameScene extends Phaser.Scene {
   constructor() {
     super({ key: "GameScene" });
     this.myBox = null;
-    this.enemyBox = null;
-    this.opponentId = null;
+    this.otherPlayers = {}; // Use an object/Map to store other players by ID
+    this.opponentId = null; // Still useful if you want to track a specific "primary" opponent
     this.playerBounds = null;
     this.isTopPlayer = false; // Flag to determine which half the player belongs to
 
@@ -15,7 +15,7 @@ export class GameScene extends Phaser.Scene {
     this.currentAbility = null;
     this.facing = "up"; // Default facing direction
     this.shiftActive = false;
-    this.originalColor = 0x00ff00;
+    this.originalColor = 0x00ff00; // Original color (you might not need this if using sprites)
     this.shiftTimer = null;
 
     this.activeHookLine = null;
@@ -23,9 +23,9 @@ export class GameScene extends Phaser.Scene {
     this.respawnCountdownText = null; // New: For displaying countdown
 
     this.myScore = 0;
-    this.opponentScore = 0;
+    this.opponentScore = 0; // This will likely need to be an object for multiple opponents
     this.myScoreText = null;
-    this.opponentScoreText = null;
+    this.opponentScoreText = null; // This will also need to be dynamic for multiple opponents
   }
 
   preload() {
@@ -85,17 +85,11 @@ export class GameScene extends Phaser.Scene {
       frameRate: 6,
       repeat: -1,
     });
+
+    // Initialize myBox here, its position will be set in setupGame
     this.myBox = this.add.sprite(0, 0, "butcher").setDepth(5);
-
-    this.myBox.setScale(2, 2); // width × height scale
-
-    this.myBox.play("butcher_idle"); // Start with idle animation
-
-    this.enemyBox = this.add.sprite(0, 0, "butcher").setDepth(5);
-
-    this.enemyBox.setScale(2, 2);
-
-    this.enemyBox.play("butcher_idle");
+    this.myBox.setScale(2, 2);
+    this.myBox.play("butcher_idle");
 
     // Add physics body AFTER setting initial position. This is critical for movement.
     this.physics.add.existing(this.myBox);
@@ -191,6 +185,18 @@ export class GameScene extends Phaser.Scene {
         strokeThickness: 4,
       })
       .setDepth(100);
+
+    // Opponent score text - this will need to be dynamic for multiple players
+    this.opponentScoreText = this.add
+      .text(this.game.config.width - 16, 16, "Opponent Score: 0", {
+        font: "24px Arial",
+        fill: "#ffffff",
+        stroke: "#000000",
+        strokeThickness: 4,
+      })
+      .setOrigin(1, 0) // Align to top-right
+      .setDepth(100);
+
     // Respawn countdown text setup
     this.respawnCountdownText = this.add
       .text(this.game.config.width / 2, this.game.config.height / 2, "", {
@@ -205,7 +211,6 @@ export class GameScene extends Phaser.Scene {
       .setVisible(false);
 
     // This line draws a white line at y=300 for visual debugging or reference.
-    // It's not involved in collision/bounds.
     this.add
       .line(0, 300, 0, 0, 1024, 0, 0xffffff)
       .setOrigin(0, 0)
@@ -231,38 +236,38 @@ export class GameScene extends Phaser.Scene {
     // --- Socket Listeners ---
     socket.on("playerMove", ({ id, x, y }) => {
       if (id !== socket.id) {
-        const oldX = this.enemyBox.x;
-        const oldY = this.enemyBox.y;
+        const playerSprite = this.otherPlayers[id];
+        if (!playerSprite) {
+          console.warn(`Player sprite not found for ID: ${id}`);
+          return;
+        }
+        const oldX = playerSprite.x;
+        const oldY = playerSprite.y;
 
         // Always update the opponent's position for accuracy
-        this.enemyBox.setPosition(x, y);
+        playerSprite.setPosition(x, y);
 
         const dx = x - oldX;
         const dy = y - oldY;
         const distanceTraveled = Phaser.Math.Distance.Between(x, y, oldX, oldY);
 
         // Define a threshold for "significant" movement
-        // Only play walking animation if the opponent moved beyond this threshold
-        const movementThreshold = 5; // Increased from 2 to 5 (you can experiment with this)
+        const movementThreshold = 5;
 
         if (distanceTraveled > movementThreshold) {
-          // Animate movement if a significant distance was covered
           if (Math.abs(dx) > Math.abs(dy)) {
-            // Determine facing direction and apply flip for horizontal movement
-            this.enemyBox.setFlipX(dx < 0); // Flip for right movement (if walk_left is base)
-            this.enemyBox.play("butcher_walk_left", true); // Reuse left frames for horizontal
+            playerSprite.setFlipX(dx < 0);
+            playerSprite.play("butcher_walk_left", true);
           } else {
-            // Vertical movement
-            this.enemyBox.setFlipX(false); // Reset flip for vertical movement
-            this.enemyBox.play(
+            playerSprite.setFlipX(false);
+            playerSprite.play(
               dy > 0 ? "butcher_walk_down" : "butcher_walk_up",
               true
             );
           }
         } else {
-          // If not moving significantly, ensure the idle animation is playing
-          if (this.enemyBox.anims.currentAnim?.key !== "butcher_idle") {
-            this.enemyBox.play("butcher_idle", true);
+          if (playerSprite.anims.currentAnim?.key !== "butcher_idle") {
+            playerSprite.play("butcher_idle", true);
           }
         }
       }
@@ -274,8 +279,10 @@ export class GameScene extends Phaser.Scene {
         console.log(
           `🎣 Hook started by ${playerId} from (${startX}, ${startY})`
         );
+        // Clear any existing hook line if one is active (e.g., from a previous player)
         if (this.activeHookLine) this.activeHookLine.destroy();
         if (this.hookTween) this.hookTween.stop();
+
         this.activeHookLine = this.add.graphics().setDepth(6);
         this.activeHookLine.lineStyle(2, 0xffffff, 1);
         const hookVisualState = { currentLength: 0 };
@@ -308,18 +315,26 @@ export class GameScene extends Phaser.Scene {
         });
       }
     );
+
     socket.on("scoreUpdated", ({ playerId, score }) => {
-      // Check if the update is for my score or the opponent's score
+      // You will need to manage scores for multiple players more robustly
+      // For now, assuming opponentId is still set for a "main" opponent or if only two players
       if (playerId === socket.id) {
         this.myScore = score;
         this.myScoreText.setText(`My Score: ${this.myScore}`);
         console.log(`My score updated to: ${this.myScore}`);
-      } else if (this.opponentId && playerId === this.opponentId) {
-        this.opponentScore = score;
-        this.opponentScoreText.setText(`Opponent Score: ${this.opponentScore}`);
-        console.log(`Opponent score updated to: ${this.opponentScore}`);
+      } else if (this.otherPlayers[playerId]) {
+        // Check if it's one of the other players
+        // If you have a dedicated opponent score display, you'd update that specific one
+        // For a multi-player game, you'd likely display all player scores
+        this.opponentScore = score; // This might be misleading if you have many opponents
+        this.opponentScoreText.setText(`Opponent Score: ${this.opponentScore}`); // Adjust this for multi-player
+        console.log(
+          `Opponent ${playerId} score updated to: ${this.opponentScore}`
+        );
       }
     });
+
     socket.on("hookHit", ({ by, target, pullTo }) => {
       console.log(
         `🎣 HookHit received: by ${by}, target ${target}, pullTo (${pullTo.x}, ${pullTo.y})`
@@ -332,24 +347,28 @@ export class GameScene extends Phaser.Scene {
         this.hookTween.stop();
         this.hookTween = null;
       }
+
       if (by === socket.id) {
-        this.tweens.add({
-          targets: this.enemyBox,
-          x: pullTo.x,
-          y: pullTo.y - 40, // Adjust pullTo Y if needed for visual effect
-          duration: 300,
-        });
+        // I hooked someone
+        const hookedPlayerSprite = this.otherPlayers[target];
+        if (hookedPlayerSprite) {
+          this.tweens.add({
+            targets: hookedPlayerSprite, // Target the specific hooked player sprite
+            x: pullTo.x,
+            y: pullTo.y - 40, // Adjust pullTo Y if needed for visual effect
+            duration: 300,
+          });
+        }
         this.currentAbility = null;
         console.log("currentAbility cleared (Hook hit by me).");
       } else if (target === socket.id) {
-        // If I am the target, apply temporary visual effect after pull
+        // I was hooked
         this.tweens.add({
           targets: this.myBox,
           x: pullTo.x,
           y: pullTo.y + 40, // Adjust pullTo Y if needed for visual effect
           duration: 300,
           onComplete: () => {
-            // Client-side visual and state management for being hooked
             this.myBox.setVisible(false); // Hide player immediately after pull
             this.currentAbility = "hooked"; // Set a temporary state to prevent movement/abilities
             console.log("Player hidden and in 'hooked' state.");
@@ -379,12 +398,27 @@ export class GameScene extends Phaser.Scene {
       console.log("currentAbility cleared (Hook missed).");
     });
 
-    socket.on("startRespawnCountdown", () => {
-      // This event is now redundant as we show countdown after hookHit,
-      // but keeping it here for clarity if you want to use it for other events.
-      console.log(
-        "Received startRespawnCountdown from server (client-side already handles this)."
-      );
+    socket.on("startRespawnCountdown", ({ target }) => {
+      console.log(`Received startRespawnCountdown for ${target}.`);
+      if (target === socket.id) {
+        this.myBox.setVisible(false); // Hide if you're the one getting respawned
+      } else {
+        const respawnedPlayer = this.otherPlayers[target];
+        if (respawnedPlayer) {
+          respawnedPlayer.setVisible(false); // Hide opponent
+        }
+      }
+
+      // Show countdown on screen regardless of whether it's you or another player (customize as needed)
+      this.respawnCountdownText.setVisible(true).setText("2");
+
+      this.time.delayedCall(1000, () => {
+        this.respawnCountdownText.setText("1");
+      });
+
+      this.time.delayedCall(2000, () => {
+        this.respawnCountdownText.setVisible(false);
+      });
     });
 
     socket.on("respawn", ({ x, y, target }) => {
@@ -399,42 +433,54 @@ export class GameScene extends Phaser.Scene {
         this.currentAbility = null; // Ensure ability state is cleared after respawn
         this.respawnCountdownText.setVisible(false); // Hide countdown text
         console.log("Player respawned and visible.");
+      } else {
+        const respawnedPlayer = this.otherPlayers[target];
+        if (respawnedPlayer) {
+          respawnedPlayer.setPosition(x, y);
+          respawnedPlayer.setVisible(true); // Make opponent visible
+          console.log(`Opponent ${target} respawned and visible.`);
+        }
       }
-    });
-    socket.on("startRespawnCountdown", ({ target }) => {
-      if (target === socket.id) {
-        this.myBox.setVisible(false); // Hide if you're the one getting respawned
-      }
-
-      // Show countdown on screen regardless of whether it's you or the opponent
-      this.respawnCountdownText.setVisible(true).setText("2");
-
-      this.time.delayedCall(1000, () => {
-        this.respawnCountdownText.setText("1");
-      });
-
-      this.time.delayedCall(2000, () => {
-        this.respawnCountdownText.setVisible(false);
-      });
     });
 
     socket.on("blinkEffect", ({ playerId, newX, newY }) => {
       console.log(
         `✨ BlinkEffect received for ${playerId}: (${newX}, ${newY})`
       );
-      if (playerId !== socket.id) this.enemyBox.setPosition(newX, newY);
+      if (playerId !== socket.id) {
+        const playerSprite = this.otherPlayers[playerId];
+        if (playerSprite) {
+          playerSprite.setPosition(newX, newY);
+        }
+      }
     });
+
     socket.on("shiftEffect", ({ playerId }) => {
       console.log(`👻 ShiftEffect received for ${playerId}`);
-      if (playerId !== socket.id) this.enemyBox.fillColor = 0x999999;
+      if (playerId !== socket.id) {
+        const playerSprite = this.otherPlayers[playerId];
+        if (playerSprite) {
+          // Assuming you have a way to visually represent this (e.g., tint, alpha)
+          playerSprite.setAlpha(0.5); // Example: make opponent semi-transparent
+        }
+      }
     });
+
     socket.on("shiftEndEffect", ({ playerId }) => {
       console.log(`✅ ShiftEndEffect received for ${playerId}`);
-      if (playerId !== socket.id) this.enemyBox.fillColor = 0xff0000;
+      if (playerId !== socket.id) {
+        const playerSprite = this.otherPlayers[playerId];
+        if (playerSprite) {
+          playerSprite.setAlpha(1); // Example: revert alpha
+        }
+      }
     });
+
     socket.on("opponentDisconnected", (message) => {
       console.warn(`💔 Opponent disconnected: ${message}`);
       alert(message);
+      // You might want to clean up the disconnected player's sprite here
+      // before transitioning back to the lobby, or based on the message.
       this.scene.start("LobbyScene");
     });
 
@@ -443,77 +489,72 @@ export class GameScene extends Phaser.Scene {
   }
 
   setupGame(players, positions) {
-    if (
-      !positions ||
-      !positions[socket.id] ||
-      !players ||
-      players.length !== 2
-    ) {
+    // Now allows for more than 2 players, as long as there's at least one other player
+    if (!positions || !positions[socket.id] || !players || players.length < 1) {
       console.warn("⚠️ Invalid game data for setupGame:", positions, players);
       return;
     }
 
-    this.opponentId = players.find((id) => id !== socket.id);
-    console.log(
-      `GameScene Setup: My ID: ${socket.id}, Opponent ID: ${this.opponentId}`
-    );
+    console.log(`GameScene Setup: My ID: ${socket.id}`);
 
-    const mySpawn = positions[socket.id];
-    const enemySpawn = positions[this.opponentId];
-
-    console.log(
-      `GameScene Setup: Setting myBox position to (${mySpawn.x}, ${mySpawn.y})`
-    );
-    this.myBox.setPosition(mySpawn.x, mySpawn.y);
-
-    console.log(
-      `GameScene Setup: Setting enemyBox position to (${enemySpawn.x}, ${enemySpawn.y})`
-    );
-    this.enemyBox.setPosition(enemySpawn.x, enemySpawn.y);
+    const gameHeight = this.game.config.height;
+    const gameWidth = this.game.config.width;
 
     // --- CRITICAL CONSTANTS: ADJUST THESE BASED ON YOUR BACKGROUND IMAGE ---
-    // These values define the *visual* top and bottom edges of the impassable river.
-    const riverVisualTop = 240; // The Y-coordinate where the river visually begins (top player's boundary)
-    const riverVisualBottom = 380; // The Y-coordinate where the river visually ends (bottom player's boundary)
+    const riverVisualTop = 240;
+    const riverVisualBottom = 380;
     // --- END CRITICAL CONSTANTS ---
 
-    const gameHeight = this.game.config.height; // Should be 600
-    const gameWidth = this.game.config.width; // Should be 1024
-    const playerSize = this.myBox.body.width; // 32
+    players.forEach((playerId) => {
+      const playerSpawn = positions[playerId];
+      if (!playerSpawn) {
+        console.warn(`No spawn position found for player ID: ${playerId}`);
+        return;
+      }
 
-    // Determine if this client is the top player based on spawn position
-    // Assuming players spawn on either side of the actual mid-point (GAME_HEIGHT / 2)
-    this.isTopPlayer = mySpawn.y < gameHeight / 2;
+      if (playerId === socket.id) {
+        // This is my player
+        console.log(
+          `GameScene Setup: Setting myBox position to (${playerSpawn.x}, ${playerSpawn.y})`
+        );
+        this.myBox.setPosition(playerSpawn.x, playerSpawn.y);
 
-    if (this.isTopPlayer) {
-      // Bounds for the top player: from (0,0) to (gameWidth, riverVisualTop)
-      // The `height` of the rectangle represents the maximum Y-coordinate for the *bottom edge* of the player.
-      // So, the top-left corner of the player can go from 0 up to (riverVisualTop - playerSize).
-      this.playerBounds = new Phaser.Geom.Rectangle(
-        0,
-        0,
-        gameWidth,
-        riverVisualTop
-      );
-      console.log(
-        `GameScene Setup: Player ${
-          socket.id
-        } is the TOP player. Bounds: ${JSON.stringify(this.playerBounds)}`
-      );
-    } else {
-      // Bounds for the bottom player: from (0, riverVisualBottom) to (gameWidth, gameHeight)
-      this.playerBounds = new Phaser.Geom.Rectangle(
-        0,
-        riverVisualBottom, // Top Y for the bottom player's bounds
-        gameWidth,
-        gameHeight - riverVisualBottom // Height of the playable area for the bottom player
-      );
-      console.log(
-        `GameScene Setup: Player ${
-          socket.id
-        } is the BOTTOM player. Bounds: ${JSON.stringify(this.playerBounds)}`
-      );
-    }
+        this.isTopPlayer = playerSpawn.y < gameHeight / 2;
+
+        if (this.isTopPlayer) {
+          this.playerBounds = new Phaser.Geom.Rectangle(
+            0,
+            0,
+            gameWidth,
+            riverVisualTop
+          );
+        } else {
+          this.playerBounds = new Phaser.Geom.Rectangle(
+            0,
+            riverVisualBottom,
+            gameWidth,
+            gameHeight - riverVisualBottom
+          );
+        }
+        console.log(
+          `GameScene Setup: Player ${socket.id} is the ${
+            this.isTopPlayer ? "TOP" : "BOTTOM"
+          } player. Bounds: ${JSON.stringify(this.playerBounds)}`
+        );
+      } else {
+        // This is an opponent
+        console.log(
+          `GameScene Setup: Creating and setting opponent ${playerId} position to (${playerSpawn.x}, ${playerSpawn.y})`
+        );
+        const opponentSprite = this.add
+          .sprite(playerSpawn.x, playerSpawn.y, "butcher")
+          .setDepth(5);
+        opponentSprite.setScale(2, 2);
+        opponentSprite.play("butcher_idle");
+        this.otherPlayers[playerId] = opponentSprite; // Store the opponent sprite
+      }
+    });
+
     console.log("GameScene Setup: Initial game setup complete.");
   }
 
@@ -601,10 +642,6 @@ export class GameScene extends Phaser.Scene {
       this.myBox.body.setVelocity(velocityX, velocityY);
 
       // Clamp the physics body's position to enforce boundaries
-      // myBox.body.x/y is the TOP-LEFT corner of the body.
-      // playerBounds.x/y is the TOP-LEFT corner of the bounds rectangle.
-      // playerBounds.width/height is the width/height of the bounds rectangle.
-
       this.myBox.body.x = Phaser.Math.Clamp(
         this.myBox.body.x,
         this.playerBounds.x, // Minimum X (left edge of bounds)
@@ -786,13 +823,13 @@ export class GameScene extends Phaser.Scene {
     this.showCooldown("shift", 5000);
     console.log("Shift activated!");
 
-    this.myBox.fillColor = 0x999999; // Change player color during shift
+    this.myBox.setAlpha(0.5); // Example: Change player alpha during shift
     socket.emit("shiftFired", { playerId: socket.id }); // Notify server
 
     // Set a timer for shift duration (2 seconds active time)
     this.shiftTimer = this.time.delayedCall(2000, () => {
       this.shiftActive = false; // Deactivate shift state
-      this.myBox.fillColor = this.originalColor; // Revert color
+      this.myBox.setAlpha(1); // Revert alpha
       socket.emit("shiftEnd", { playerId: socket.id }); // Notify server
       this.currentAbility = null; // Clear ability status
       console.log("currentAbility cleared (Shift duration ended).");
@@ -806,8 +843,6 @@ export class GameScene extends Phaser.Scene {
     console.log("Cancelling action...");
     // If in "hooked" state, allow cancellation of the visual effect/state
     if (this.currentAbility === "hooked") {
-      // We don't have a direct 'respawnTimer' in client anymore since server handles delay
-      // but we can still clear the visual countdown and make player visible if they pressed 'S'
       this.respawnCountdownText.setVisible(false);
       this.myBox.setVisible(true); // Ensure player is visible
       this.currentAbility = null;
@@ -820,7 +855,7 @@ export class GameScene extends Phaser.Scene {
         this.shiftTimer = null;
       }
       this.shiftActive = false;
-      this.myBox.fillColor = this.originalColor;
+      this.myBox.setAlpha(1); // Revert alpha
       socket.emit("shiftEnd", { playerId: socket.id });
       this.currentAbility = null;
       console.log("currentAbility cleared (Shift cancelled manually).");

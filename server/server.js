@@ -9,30 +9,25 @@ const io = require("socket.io")(server, {
     methods: ["GET", "POST"],
   },
 });
-// Socket.io logic here...
-io.on("connection", (socket) => {
-  console.log("Socket connected:", socket.id);
-  // Your game logic here...
-});
+
 const PORT = process.env.PORT || 3000; // Use environment variable for port
 
 app.use(express.static("client"));
 
-let players = {}; // Stores player data: { socketId: { score, lastPosition: {x,y}, bounds: {x, y, width, height}, isRespawning: boolean }, ... }
+let players = {}; // Stores player data: { socketId: { score, lastPosition: {x,y}, bounds: {left, right, top, bottom}, isRespawning: boolean, name: string }, ... }
 let rooms = {};
 
 // Game Constants (should match client-side for consistent logic)
 const GAME_WIDTH = 1024;
 const GAME_HEIGHT = 600;
 
-// --- CRITICAL CONSTANTS: ADJUST THESE BASED ON YOUR BACKGROUND IMAGE ---
-// These values define the *visual* top and bottom edges of the impassable river.
-// The clamping logic will ensure the player's 32x32 body stops at these lines.
-const RIVER_VISUAL_TOP = 240; // The Y-coordinate where the river visually begins
-const RIVER_VISUAL_BOTTOM = 380; // The Y-coordinate where the river visually ends
-// --- END CRITICAL CONSTANTS ---
-
 const PLAYER_SIZE = 32; // Assuming player box is 32x32
+
+// If QUADRANT_WIDTH and QUADRANT_HEIGHT were used elsewhere, keep them.
+// Otherwise, they are not strictly needed for the half-screen split logic now.
+// I'll re-add them just in case they were removed by mistake and used elsewhere.
+const QUADRANT_WIDTH = GAME_WIDTH / 2;
+const QUADRANT_HEIGHT = GAME_HEIGHT / 2;
 
 // Constants for Hook logic
 const HOOK_LEN = 300; // Max length of the hook
@@ -154,23 +149,31 @@ function segmentsIntersect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
 io.on("connection", (socket) => {
   console.log(`🔌 User connected: ${socket.id}`);
 
-  socket.on("createRoom", (roomCode) => {
+  socket.on("createRoom", ({ roomCode, name }) => {
     if (rooms[roomCode]) {
-      console.log(
-        `⚠️ Room ${roomCode} already exists. User ${socket.id} tried to create it.`
-      );
       socket.emit("roomError", "Room with this code already exists.");
       return;
     }
+
     socket.join(roomCode);
     socket.roomCode = roomCode;
     rooms[roomCode] = [socket.id];
-    players[socket.id] = { score: 0, isRespawning: false }; // Initialize isRespawning
-    console.log(`➕ User ${socket.id} created and joined room: ${roomCode}`);
+    players[socket.id] = {
+      score: 0,
+      isRespawning: false,
+      name: name || "Host",
+    };
+
     socket.emit("roomCreated", roomCode);
+
+    const playerList = rooms[roomCode].map((id) => ({
+      id,
+      name: players[id]?.name || id,
+    }));
+    io.to(roomCode).emit("updatePlayerList", playerList);
   });
 
-  socket.on("joinRoom", (roomCode) => {
+  socket.on("joinRoom", ({ roomCode, name }) => {
     const room = rooms[roomCode];
     if (!room) {
       console.log(
@@ -179,7 +182,8 @@ io.on("connection", (socket) => {
       socket.emit("roomError", "Room does not exist.");
       return;
     }
-    if (room.length >= 2) {
+    // Allow up to 4 players
+    if (room.length >= 4) {
       console.log(
         `⚠️ Room ${roomCode} is full. User ${socket.id} tried to join.`
       );
@@ -194,71 +198,146 @@ io.on("connection", (socket) => {
     socket.join(roomCode);
     socket.roomCode = roomCode;
     room.push(socket.id);
-    players[socket.id] = { score: 0, isRespawning: false }; // Initialize isRespawning
+    players[socket.id] = {
+      score: 0,
+      isRespawning: false,
+      name: name || "Anonymous",
+    };
+    const playerList = rooms[roomCode].map((id) => ({
+      id,
+      name: players[id]?.name || id,
+    }));
+    io.to(roomCode).emit("updatePlayerList", playerList);
     console.log(`➕ User ${socket.id} joined room: ${roomCode}`);
 
-    if (room.length === 2) {
-      const [id1, id2] = room;
-      console.log(`🎮 Two players in room ${roomCode}. Starting game...`);
+    if (room.length === 4) {
+      // Start game when 4 players join
+      console.log(`🎮 Four players in room ${roomCode}. Starting game...`);
 
-      const halfPlayerSize = PLAYER_SIZE / 2;
+      const spawnPositions = {};
+      const playerIds = rooms[roomCode]; // Get the list of player IDs in the room
 
-      // Player 1 (id1) will be top player
-      const spawnTop = {
-        x:
-          Math.floor(Math.random() * (GAME_WIDTH - PLAYER_SIZE)) +
-          halfPlayerSize,
-        // Spawn top player such that their center is within their safe zone
-        y:
-          Math.floor(Math.random() * (RIVER_VISUAL_TOP - PLAYER_SIZE)) + // Max Y for top-left of player is (RIVER_VISUAL_TOP - PLAYER_SIZE)
-          halfPlayerSize, // Offset to get center
+      // Define player-specific bounds for the TOP-LEFT of their physics body (PLAYER_SIZE is 32)
+      // and calculate spawn positions within these bounds.
+
+      // Player 0 (Host / "My Player" type): Left Half (Horizontal Center Boundary)
+      // Playable area for the TOP-LEFT of the 32x32 player sprite:
+      players[playerIds[0]].bounds = {
+        left: 0,
+        top: 0,
+        right: GAME_WIDTH / 2 - PLAYER_SIZE,
+        bottom: GAME_HEIGHT - PLAYER_SIZE,
       };
-
-      // Player 2 (id2) will be bottom player
-      const spawnBottom = {
+      // Spawn position (center of sprite) within these bounds:
+      spawnPositions[playerIds[0]] = {
         x:
-          Math.floor(Math.random() * (GAME_WIDTH - PLAYER_SIZE)) +
-          halfPlayerSize,
-        // Spawn bottom player such that their center is within their safe zone
+          Math.floor(
+            Math.random() *
+              (players[playerIds[0]].bounds.right -
+                players[playerIds[0]].bounds.left)
+          ) +
+          players[playerIds[0]].bounds.left +
+          PLAYER_SIZE / 2,
         y:
           Math.floor(
-            Math.random() * (GAME_HEIGHT - RIVER_VISUAL_BOTTOM - PLAYER_SIZE)
+            Math.random() *
+              (players[playerIds[0]].bounds.bottom -
+                players[playerIds[0]].bounds.top)
           ) +
-          RIVER_VISUAL_BOTTOM +
-          halfPlayerSize, // Offset to get center
+          players[playerIds[0]].bounds.top +
+          PLAYER_SIZE / 2,
       };
 
-      players[id1].lastPosition = spawnTop;
-      players[id2].lastPosition = spawnBottom;
-
-      // Define server-side bounds for each player
-      // These bounds are for the player's *center* coordinates.
-      // The `pointInRect` and clamping logic operate on these.
-      players[id1].bounds = {
-        left: halfPlayerSize,
-        top: halfPlayerSize,
-        right: GAME_WIDTH - halfPlayerSize,
-        bottom: RIVER_VISUAL_TOP - halfPlayerSize, // Max Y for center of top player
+      // Player 1 ("Opponent" type): Top Half (Vertical Center Boundary)
+      players[playerIds[1]].bounds = {
+        left: 0,
+        top: 0,
+        right: GAME_WIDTH - PLAYER_SIZE,
+        bottom: GAME_HEIGHT / 2 - PLAYER_SIZE,
       };
-      players[id2].bounds = {
-        left: halfPlayerSize,
-        top: RIVER_VISUAL_BOTTOM + halfPlayerSize, // Min Y for center of bottom player
-        right: GAME_WIDTH - halfPlayerSize,
-        bottom: GAME_HEIGHT - halfPlayerSize,
+      spawnPositions[playerIds[1]] = {
+        x:
+          Math.floor(
+            Math.random() *
+              (players[playerIds[1]].bounds.right -
+                players[playerIds[1]].bounds.left)
+          ) +
+          players[playerIds[1]].bounds.left +
+          PLAYER_SIZE / 2,
+        y:
+          Math.floor(
+            Math.random() *
+              (players[playerIds[1]].bounds.bottom -
+                players[playerIds[1]].bounds.top)
+          ) +
+          players[playerIds[1]].bounds.top +
+          PLAYER_SIZE / 2,
       };
 
-      console.log(
-        `Spawn positions: ${id1} at (${spawnTop.x}, ${spawnTop.y}), ${id2} at (${spawnBottom.x}, ${spawnBottom.y})`
-      );
-      console.log(`Player ${id1} bounds:`, players[id1].bounds);
-      console.log(`Player ${id2} bounds:`, players[id2].bounds);
+      // Player 2 ("My Player" type): Right Half (Horizontal Center Boundary)
+      players[playerIds[2]].bounds = {
+        left: GAME_WIDTH / 2,
+        top: 0,
+        right: GAME_WIDTH - PLAYER_SIZE,
+        bottom: GAME_HEIGHT - PLAYER_SIZE,
+      };
+      spawnPositions[playerIds[2]] = {
+        x:
+          Math.floor(
+            Math.random() *
+              (players[playerIds[2]].bounds.right -
+                players[playerIds[2]].bounds.left)
+          ) +
+          players[playerIds[2]].bounds.left +
+          PLAYER_SIZE / 2,
+        y:
+          Math.floor(
+            Math.random() *
+              (players[playerIds[2]].bounds.bottom -
+                players[playerIds[2]].bounds.top)
+          ) +
+          players[playerIds[2]].bounds.top +
+          PLAYER_SIZE / 2,
+      };
+
+      // Player 3 ("Opponent" type): Bottom Half (Vertical Center Boundary)
+      players[playerIds[3]].bounds = {
+        left: 0,
+        top: GAME_HEIGHT / 2,
+        right: GAME_WIDTH - PLAYER_SIZE,
+        bottom: GAME_HEIGHT - PLAYER_SIZE,
+      };
+      spawnPositions[playerIds[3]] = {
+        x:
+          Math.floor(
+            Math.random() *
+              (players[playerIds[3]].bounds.right -
+                players[playerIds[3]].bounds.left)
+          ) +
+          players[playerIds[3]].bounds.left +
+          PLAYER_SIZE / 2,
+        y:
+          Math.floor(
+            Math.random() *
+              (players[playerIds[3]].bounds.bottom -
+                players[playerIds[3]].bounds.top)
+          ) +
+          players[playerIds[3]].bounds.top +
+          PLAYER_SIZE / 2,
+      };
+
+      // Assign initial positions to players data
+      playerIds.forEach((id) => {
+        players[id].lastPosition = spawnPositions[id];
+        console.log(
+          `Player ${id} spawn at (${spawnPositions[id].x}, ${spawnPositions[id].y}) with bounds:`,
+          players[id].bounds
+        );
+      });
 
       io.to(roomCode).emit("startGame", {
-        players: [id1, id2],
-        positions: {
-          [id1]: spawnTop,
-          [id2]: spawnBottom,
-        },
+        players: playerIds,
+        positions: spawnPositions,
       });
     }
   });
@@ -268,16 +347,28 @@ io.on("connection", (socket) => {
     if (!room) return;
 
     const player = players[id];
-    // IMPORTANT: Prevent movement updates if the player is currently respawning
     if (player && player.bounds && !player.isRespawning) {
-      // Clamp player position (center of the player) to their designated bounds on the server
-      x = Math.max(player.bounds.left, Math.min(x, player.bounds.right));
-      y = Math.max(player.bounds.top, Math.min(y, player.bounds.bottom));
+      // Incoming x,y are sprite centers. Convert to top-left for clamping against bounds.
+      const clampedX = x - PLAYER_SIZE / 2;
 
-      player.lastPosition = { x, y };
-      socket.to(room).emit("playerMove", { id, x, y });
+      const clampedY = Math.max(
+        player.bounds.top,
+        Math.min(y - PLAYER_SIZE / 2, player.bounds.bottom)
+      );
+
+      // Convert back to center for storing and emitting
+      player.lastPosition = {
+        x: clampedX + PLAYER_SIZE / 2,
+        y: clampedY + PLAYER_SIZE / 2,
+      };
+
+      // Emit to all others in the room
+      socket.to(room).emit("playerMove", {
+        id,
+        x: player.lastPosition.x,
+        y: player.lastPosition.y,
+      });
     } else if (player && player.isRespawning) {
-      // If player is respawning, just acknowledge but don't move them
       console.log(`🚫 Player ${id} tried to move while respawning. Ignoring.`);
     } else {
       console.log(
@@ -287,113 +378,29 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("hookFired", ({ playerId, direction, targetX, targetY }) => {
+  socket.on("hookFired", ({ playerId, targetX, targetY }) => {
     const room = socket.roomCode;
     if (!room) return;
 
-    const opponentId = rooms[room]?.find((id) => id !== playerId);
     const player = players[playerId];
-    const opponent = players[opponentId];
-
-    if (
-      !player ||
-      !opponent ||
-      !player.lastPosition ||
-      !opponent.lastPosition
-    ) {
-      console.log("Hook fired with missing player/opponent data.");
-      io.to(playerId).emit("hookMiss"); // Immediately miss if data is missing
-      return;
-    }
-
-    // --- REMOVE THIS ENTIRE INCORRECT BLOCK (starts here) ---
-    /*
-    if (hookHitsTarget) {
-      // Send hookHit to both clients
-      io.to(player1Id).emit("hookHit", {
-        by: hookerId,
-        target: hookedId,
-        pullTo: newTargetPos,
-      });
-      io.to(player2Id).emit("hookHit", {
-        by: hookerId,
-        target: hookedId,
-        pullTo: newTargetPos,
-      });
-
-      // Increment score for the hooker
-      game.players[hookerId].score += 1; // Assuming you have a game state object
-
-      // Send score update to both clients
-      io.to(player1Id).emit("scoreUpdated", {
-        playerId: hookerId,
-        score: game.players[hookerId].score,
-      });
-      io.to(player2Id).emit("scoreUpdated", {
-        playerId: hookerId,
-        score: game.players[hookerId].score,
-      });
-      // You might want to send the scores of *both* players in a single update for simplicity
-      // io.emit('allScoresUpdated', { [player1Id]: game.players[player1Id].score, [player2Id]: game.players[player2Id].score });
-    } else {
-      // Send hookMiss
-      io.to(hookerId).emit("hookMiss");
-    }
-    */
-    // --- REMOVE THIS ENTIRE INCORRECT BLOCK (ends here) ---
-
-    // NEW: Prevent hooking an opponent who is currently 'respawning'
-    if (opponent.isRespawning) {
-      console.log(
-        `🚫 Player ${opponentId} is currently respawning, cannot be hooked.`
-      );
-      io.to(playerId).emit("hookMiss"); // Notify the caster of the miss
+    if (!player || !player.lastPosition) {
+      console.log("Hook fired with missing player data (caster).");
+      io.to(playerId).emit("hookMiss", playerId);
       return;
     }
 
     const startX = player.lastPosition.x;
     const startY = player.lastPosition.y;
 
-    let hookAngle;
-    // Determine hook angle: prioritize mouse aim if targetX/Y are provided, otherwise use direction
-    if (typeof targetX === "number" && typeof targetY === "number") {
-      hookAngle = Math.atan2(targetY - startY, targetX - startX);
-    } else {
-      // Fallback for older clients or if targetX/Y are somehow not sent
-      switch (direction) {
-        case "left":
-          hookAngle = Math.PI;
-          break;
-        case "right":
-          hookAngle = 0;
-          break;
-        case "up":
-          hookAngle = -Math.PI / 2;
-          break;
-        case "down":
-          hookAngle = Math.PI / 2;
-          break;
-        default:
-          console.error("Invalid hook direction/target received.");
-          io.to(playerId).emit("hookMiss"); // Immediately miss if invalid
-          return;
-      }
-    }
+    const hookAngle = Math.atan2(targetY - startY, targetX - startX);
 
-    // Opponent's Axis-Aligned Bounding Box (AABB) for collision detection
-    const oppPos = opponent.lastPosition; // This is the opponent's center
-    const half = PLAYER_SIZE / 2;
-    const oppRect = {
-      left: oppPos.x - half,
-      right: oppPos.x + half,
-      top: oppPos.y - half,
-      bottom: oppPos.y + half,
-    };
+    // Find all *other* players in the room who are not respawning
+    const potentialTargets = rooms[room].filter(
+      (id) => id !== playerId && !players[id]?.isRespawning
+    );
 
-    let currentHookLength = 0;
-    let hitDetected = false;
+    let hookedId = null;
 
-    // Notify clients to start animating the hook
     io.to(room).emit("hookStarted", {
       playerId,
       startX,
@@ -403,91 +410,96 @@ io.on("connection", (socket) => {
       hookSpeed: HOOK_SPEED,
     });
 
-    // Server-side simulation of hook extension and collision detection
+    let currentHookLength = 0;
     const hookInterval = setInterval(() => {
-      if (hitDetected) {
-        clearInterval(hookInterval);
-        return;
-      }
-
       currentHookLength += (HOOK_SPEED * HOOK_CHECK_INTERVAL) / 1000;
 
       if (currentHookLength > HOOK_LEN) {
         clearInterval(hookInterval);
         console.log(`❌ Hook MISS by ${playerId} (max length reached)`);
-        io.to(playerId).emit("hookMiss");
+        io.to(playerId).emit("hookMiss", playerId);
         return;
       }
 
       const hookTipX = startX + Math.cos(hookAngle) * currentHookLength;
       const hookTipY = startY + Math.sin(hookAngle) * currentHookLength;
 
-      // Crucial: Collision check is only for the *tip* of the hook as it extends
-      const hit = pointInRect(hookTipX, hookTipY, oppRect);
+      for (const targetPlayerId of potentialTargets) {
+        const targetPlayer = players[targetPlayerId];
+        if (!targetPlayer || !targetPlayer.lastPosition) continue;
 
-      if (hit) {
-        hitDetected = true;
-        clearInterval(hookInterval);
+        const oppPos = targetPlayer.lastPosition; // This is the opponent's center
+        const half = PLAYER_SIZE / 2;
+        const oppRect = {
+          left: oppPos.x - half,
+          right: oppPos.x + half,
+          top: oppPos.y - half,
+          bottom: oppPos.y + half,
+        };
 
-        // Notify all clients in the room about the hook hit and pull
-        io.to(room).emit("hookHit", {
-          by: playerId, // This is the hooker
-          target: opponentId, // This is the hooked
-          pullTo: { x: player.lastPosition.x, y: player.lastPosition.y }, // Pull to caster's CURRENT position
-        });
+        const hit = pointInRect(hookTipX, hookTipY, oppRect);
 
-        console.log(`🎯 Hook HIT by ${playerId} on ${opponentId}`);
+        if (hit) {
+          hookedId = targetPlayerId;
+          clearInterval(hookInterval);
 
-        // --- NEW: Increment score for the player who successfully hooked ---
-        players[playerId].score += 1;
-        console.log(
-          `🎉 Player ${playerId} scored! New score: ${players[playerId].score}`
-        );
-
-        // --- NEW: Broadcast the updated score to both clients in the room ---
-        io.to(room).emit("scoreUpdated", {
-          playerId: playerId,
-          score: players[playerId].score,
-        });
-
-        // Set opponent's status to respawning to prevent further hooks/movement
-        opponent.isRespawning = true;
-        // Broadcast countdown to the hooked player
-        io.to(opponentId).emit("startRespawnCountdown", { target: opponentId });
-
-        // Add a delay before sending the actual respawn command to the target
-        setTimeout(() => {
-          // Respawn opponent
-          const respawnX =
-            Math.random() * (opponent.bounds.right - opponent.bounds.left) +
-            opponent.bounds.left;
-          const respawnY =
-            Math.random() * (opponent.bounds.bottom - opponent.bounds.top) +
-            opponent.bounds.top;
-
-          opponent.lastPosition = { x: respawnX, y: respawnY };
-          opponent.isRespawning = false; // Clear respawning status
-
-          // Emit the respawn event directly to the target player
-          io.to(opponentId).emit("respawn", {
-            x: respawnX,
-            y: respawnY,
-            target: opponentId,
+          io.to(room).emit("hookHit", {
+            by: playerId, // This is the hooker
+            target: hookedId, // This is the hooked
+            pullTo: { x: player.lastPosition.x, y: player.lastPosition.y }, // Pull to caster's CURRENT position
           });
 
-          // Optionally, inform the *other* player about the opponent's new position
-          io.to(room)
-            .except(opponentId) // Exclude the respawning player themselves
-            .emit("playerMove", {
-              id: opponentId,
-              x: respawnX,
-              y: respawnY,
+          console.log(`🎯 Hook HIT by ${playerId} on ${hookedId}`);
+
+          players[playerId].score += 1;
+          console.log(
+            `🎉 Player ${playerId} scored! New score: ${players[playerId].score}`
+          );
+
+          // Broadcast score update for the hooker
+          io.to(room).emit("scoreUpdated", {
+            playerId: playerId,
+            score: players[playerId].score,
+          });
+
+          // Set opponent's status to respawning
+          players[hookedId].isRespawning = true;
+          io.to(hookedId).emit("startRespawnCountdown", { target: hookedId });
+
+          setTimeout(() => {
+            const hookedPlayerBounds = players[hookedId].bounds;
+            // Respawn within their assigned bounds.
+            // Calculate random top-left position, then convert to center.
+            const respawnBodyX =
+              Math.floor(
+                Math.random() *
+                  (hookedPlayerBounds.right - hookedPlayerBounds.left)
+              ) + hookedPlayerBounds.left;
+            const respawnBodyY =
+              Math.floor(
+                Math.random() *
+                  (hookedPlayerBounds.bottom - hookedPlayerBounds.top)
+              ) + hookedPlayerBounds.top;
+
+            // Convert to center for lastPosition and emit
+            players[hookedId].lastPosition = {
+              x: respawnBodyX + PLAYER_SIZE / 2,
+              y: respawnBodyY + PLAYER_SIZE / 2,
+            };
+            players[hookedId].isRespawning = false;
+
+            io.to(room).emit("respawn", {
+              x: players[hookedId].lastPosition.x,
+              y: players[hookedId].lastPosition.y,
+              target: hookedId,
             });
 
-          console.log(
-            `♻️ Player ${opponentId} respawned at (${respawnX}, ${respawnY})`
-          );
-        }, RESPAWN_DELAY_MS); // Use the defined respawn delay
+            console.log(
+              `♻️ Player ${hookedId} respawned at (${players[hookedId].lastPosition.x}, ${players[hookedId].lastPosition.y})`
+            );
+          }, RESPAWN_DELAY_MS);
+          break; // Exit loop after first hit
+        }
       }
     }, HOOK_CHECK_INTERVAL);
   });
@@ -500,16 +512,29 @@ io.on("connection", (socket) => {
     }
     const player = players[playerId];
     if (player && player.bounds && !player.isRespawning) {
-      // Prevent blinking while respawning
-      // Clamp blink destination (center of the player) to player's bounds
-      newX = Math.max(player.bounds.left, Math.min(newX, player.bounds.right));
-      newY = Math.max(player.bounds.top, Math.min(newY, player.bounds.bottom));
-
-      player.lastPosition = { x: newX, y: newY };
-      console.log(
-        `✨ Player ${playerId} blinked to (${newX}, ${newY}) (clamped)`
+      // Incoming newX, newY are sprite centers. Convert to top-left for clamping.
+      const clampedBodyX = Math.max(
+        player.bounds.left,
+        Math.min(newX - PLAYER_SIZE / 2, player.bounds.right)
       );
-      io.to(room).emit("blinkEffect", { playerId, newX, newY });
+      const clampedBodyY = Math.max(
+        player.bounds.top,
+        Math.min(newY - PLAYER_SIZE / 2, player.bounds.bottom)
+      );
+
+      // Convert back to center for storing and emitting
+      player.lastPosition = {
+        x: clampedBodyX + PLAYER_SIZE / 2,
+        y: clampedBodyY + PLAYER_SIZE / 2,
+      };
+      console.log(
+        `✨ Player ${playerId} blinked to (${player.lastPosition.x}, ${player.lastPosition.y}) (clamped)`
+      );
+      io.to(room).emit("blinkEffect", {
+        playerId,
+        newX: player.lastPosition.x,
+        newY: player.lastPosition.y,
+      });
     } else if (player && player.isRespawning) {
       console.log(
         `🚫 Player ${playerId} tried to blink while respawning. Ignoring.`
@@ -529,7 +554,6 @@ io.on("connection", (socket) => {
     }
     const player = players[playerId];
     if (player && !player.isRespawning) {
-      // Prevent shifting while respawning
       console.log(`👻 Player ${playerId} activated Shift.`);
       io.to(room).emit("shiftEffect", { playerId });
     } else if (player && player.isRespawning) {
@@ -557,19 +581,28 @@ io.on("connection", (socket) => {
       console.log(
         `➖ User ${socket.id} left room ${room}. Remaining: ${rooms[room].length}`
       );
+
       if (rooms[room].length === 0) {
         delete rooms[room];
         console.log(`🗑️ Room ${room} is empty and deleted.`);
-      } else if (rooms[room].length === 1) {
-        const remainingPlayerId = rooms[room][0];
-        io.to(remainingPlayerId).emit(
-          "opponentDisconnected",
-          "Your opponent has disconnected. Game ended."
-        );
-        delete rooms[room];
-        console.log(
-          `💔 Opponent disconnected in room ${room}. Notifying ${remainingPlayerId}. Room deleted.`
-        );
+      } else {
+        const playerList = rooms[room].map((id) => ({
+          id,
+          name: players[id]?.name || id,
+        }));
+        io.to(room).emit("updatePlayerList", playerList);
+
+        if (rooms[room].length < 4 && rooms[room].length > 0) {
+          io.to(room).emit(
+            "opponentDisconnected",
+            `An opponent has disconnected. Game ended for room ${room}.`
+          );
+          rooms[room].forEach((id) => {
+            delete players[id];
+          });
+          delete rooms[room];
+          console.log(`💔 Game ended in room ${room} due to disconnect.`);
+        }
       }
     }
     delete players[socket.id];
