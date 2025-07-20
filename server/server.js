@@ -3,9 +3,18 @@ const http = require("http");
 const app = express();
 const server = http.createServer(app);
 const { Server } = require("socket.io");
-const io = new Server(server);
-
-const PORT = 3000;
+const io = require("socket.io")(http, {
+  cors: {
+    origin: "https://pudge-war.netlify.app", // ✅ allow Netlify frontend
+    methods: ["GET", "POST"],
+  },
+});
+// Socket.io logic here...
+io.on("connection", (socket) => {
+  console.log("Socket connected:", socket.id);
+  // Your game logic here...
+});
+const PORT = process.env.PORT || 3000; // Use environment variable for port
 
 app.use(express.static("client"));
 
@@ -297,6 +306,42 @@ io.on("connection", (socket) => {
       return;
     }
 
+    // --- REMOVE THIS ENTIRE INCORRECT BLOCK (starts here) ---
+    /*
+    if (hookHitsTarget) {
+      // Send hookHit to both clients
+      io.to(player1Id).emit("hookHit", {
+        by: hookerId,
+        target: hookedId,
+        pullTo: newTargetPos,
+      });
+      io.to(player2Id).emit("hookHit", {
+        by: hookerId,
+        target: hookedId,
+        pullTo: newTargetPos,
+      });
+
+      // Increment score for the hooker
+      game.players[hookerId].score += 1; // Assuming you have a game state object
+
+      // Send score update to both clients
+      io.to(player1Id).emit("scoreUpdated", {
+        playerId: hookerId,
+        score: game.players[hookerId].score,
+      });
+      io.to(player2Id).emit("scoreUpdated", {
+        playerId: hookerId,
+        score: game.players[hookerId].score,
+      });
+      // You might want to send the scores of *both* players in a single update for simplicity
+      // io.emit('allScoresUpdated', { [player1Id]: game.players[player1Id].score, [player2Id]: game.players[player2Id].score });
+    } else {
+      // Send hookMiss
+      io.to(hookerId).emit("hookMiss");
+    }
+    */
+    // --- REMOVE THIS ENTIRE INCORRECT BLOCK (ends here) ---
+
     // NEW: Prevent hooking an opponent who is currently 'respawning'
     if (opponent.isRespawning) {
       console.log(
@@ -336,7 +381,6 @@ io.on("connection", (socket) => {
     }
 
     // Opponent's Axis-Aligned Bounding Box (AABB) for collision detection
-    // This rectangle is for the *entire* player body, not just the center point.
     const oppPos = opponent.lastPosition; // This is the opponent's center
     const half = PLAYER_SIZE / 2;
     const oppRect = {
@@ -387,23 +431,31 @@ io.on("connection", (socket) => {
 
         // Notify all clients in the room about the hook hit and pull
         io.to(room).emit("hookHit", {
-          by: playerId,
-          target: opponentId,
+          by: playerId, // This is the hooker
+          target: opponentId, // This is the hooked
           pullTo: { x: player.lastPosition.x, y: player.lastPosition.y }, // Pull to caster's CURRENT position
         });
 
         console.log(`🎯 Hook HIT by ${playerId} on ${opponentId}`);
 
-        // Set opponent's status to respawning to prevent further hooks/movement
-        opponent.isRespawning = true;
-        // The client-side will start visual countdown upon receiving 'hookHit'
-        // Broadcast countdown to both players so both can display the countdown
-        // Only send countdown to the player who got hooked (not to everyone)
-        io.to(opponentId).emit("startRespawnCountdown", {
-          target: opponentId,
+        // --- NEW: Increment score for the player who successfully hooked ---
+        players[playerId].score += 1;
+        console.log(
+          `🎉 Player ${playerId} scored! New score: ${players[playerId].score}`
+        );
+
+        // --- NEW: Broadcast the updated score to both clients in the room ---
+        io.to(room).emit("scoreUpdated", {
+          playerId: playerId,
+          score: players[playerId].score,
         });
 
-        // --- NEW: Add a delay before sending the actual respawn command to the target ---
+        // Set opponent's status to respawning to prevent further hooks/movement
+        opponent.isRespawning = true;
+        // Broadcast countdown to the hooked player
+        io.to(opponentId).emit("startRespawnCountdown", { target: opponentId });
+
+        // Add a delay before sending the actual respawn command to the target
         setTimeout(() => {
           // Respawn opponent
           const respawnX =

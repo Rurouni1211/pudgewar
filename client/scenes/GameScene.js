@@ -22,7 +22,10 @@ export class GameScene extends Phaser.Scene {
     this.hookTween = null;
     this.respawnCountdownText = null; // New: For displaying countdown
 
-    
+    this.myScore = 0;
+    this.opponentScore = 0;
+    this.myScoreText = null;
+    this.opponentScoreText = null;
   }
 
   preload() {
@@ -180,7 +183,14 @@ export class GameScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setDepth(12),
     };
-
+    this.myScoreText = this.add
+      .text(16, 16, "My Score: 0", {
+        font: "24px Arial",
+        fill: "#ffffff",
+        stroke: "#000000",
+        strokeThickness: 4,
+      })
+      .setDepth(100);
     // Respawn countdown text setup
     this.respawnCountdownText = this.add
       .text(this.game.config.width / 2, this.game.config.height / 2, "", {
@@ -298,7 +308,18 @@ export class GameScene extends Phaser.Scene {
         });
       }
     );
-
+    socket.on("scoreUpdated", ({ playerId, score }) => {
+      // Check if the update is for my score or the opponent's score
+      if (playerId === socket.id) {
+        this.myScore = score;
+        this.myScoreText.setText(`My Score: ${this.myScore}`);
+        console.log(`My score updated to: ${this.myScore}`);
+      } else if (this.opponentId && playerId === this.opponentId) {
+        this.opponentScore = score;
+        this.opponentScoreText.setText(`Opponent Score: ${this.opponentScore}`);
+        console.log(`Opponent score updated to: ${this.opponentScore}`);
+      }
+    });
     socket.on("hookHit", ({ by, target, pullTo }) => {
       console.log(
         `🎣 HookHit received: by ${by}, target ${target}, pullTo (${pullTo.x}, ${pullTo.y})`

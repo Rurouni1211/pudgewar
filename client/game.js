@@ -2,7 +2,8 @@
 import { GameScene } from "./scenes/GameScene.js";
 import { LobbyScene } from "./scenes/LobbyScene.js"; // Import your new lobby scene
 
-export const socket = io(); // Ensure socket is initialized once and exported
+const SERVER_URL = "https://pudgewar.onrender.com";
+export const socket = io(SERVER_URL); // Ensure socket is initialized once and exported
 
 const config = {
   type: Phaser.AUTO,
