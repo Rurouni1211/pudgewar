@@ -23,6 +23,10 @@ const config = {
     arcade: { gravity: { y: 0 }, debug: false },
   },
   scene: [BootScene, TitleScene, LobbyScene, GameScene], // LobbyScene is now the first scene
+  scale: {
+    mode: Phaser.Scale.FIT, // Or Phaser.Scale.RESIZE, etc.
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+  },
 };
 
 const game = new Phaser.Game(config);

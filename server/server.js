@@ -30,7 +30,7 @@ const QUADRANT_WIDTH = GAME_WIDTH / 2;
 const QUADRANT_HEIGHT = GAME_HEIGHT / 2;
 
 // Constants for Hook logic
-const HOOK_LEN = 300; // Max length of the hook
+const HOOK_LEN = 350; // Max length of the hook
 const HOOK_SPEED = 750; // Pixels per second hook extends
 const HOOK_CHECK_INTERVAL = 25; // How often to check for collision during hook extension (milliseconds) - Smaller is more precise but more CPU.
 
@@ -213,25 +213,19 @@ io.on("connection", (socket) => {
     io.to(roomCode).emit("updatePlayerList", playerList);
     console.log(`➕ User ${socket.id} joined room: ${roomCode}`);
 
-    if (room.length === 4) {
-      // Start game when 4 players join
-      console.log(`🎮 Four players in room ${roomCode}. Starting game...`);
+    if (rooms[roomCode].length === 2) {
+      console.log(`🎮 Two players in room ${roomCode}. Starting game...`);
 
+      const playerIds = rooms[roomCode];
       const spawnPositions = {};
-      const playerIds = rooms[roomCode]; // Get the list of player IDs in the room
 
-      // Define player-specific bounds for the TOP-LEFT of their physics body (PLAYER_SIZE is 32)
-      // and calculate spawn positions within these bounds.
-
-      // Player 0 (Host / "My Player" type): Left Half (Horizontal Center Boundary)
-      // Playable area for the TOP-LEFT of the 32x32 player sprite:
+      // Setup bounds and spawn positions for 2 players
       players[playerIds[0]].bounds = {
         left: 0,
         top: 0,
-        right: GAME_WIDTH / 2 - PLAYER_SIZE,
-        bottom: GAME_HEIGHT - PLAYER_SIZE,
+        right: GAME_WIDTH,
+        bottom: GAME_HEIGHT / 2 - PLAYER_SIZE,
       };
-      // Spawn position (center of sprite) within these bounds:
       spawnPositions[playerIds[0]] = {
         x:
           Math.floor(
@@ -251,12 +245,11 @@ io.on("connection", (socket) => {
           PLAYER_SIZE / 2,
       };
 
-      // Player 1 ("Opponent" type): Top Half (Vertical Center Boundary)
       players[playerIds[1]].bounds = {
         left: 0,
-        top: 0,
-        right: GAME_WIDTH - PLAYER_SIZE,
-        bottom: GAME_HEIGHT / 2 - PLAYER_SIZE,
+        top: GAME_HEIGHT / 2,
+        right: GAME_WIDTH,
+        bottom: GAME_HEIGHT - PLAYER_SIZE,
       };
       spawnPositions[playerIds[1]] = {
         x:
@@ -277,64 +270,10 @@ io.on("connection", (socket) => {
           PLAYER_SIZE / 2,
       };
 
-      // Player 2 ("My Player" type): Right Half (Horizontal Center Boundary)
-      players[playerIds[2]].bounds = {
-        left: GAME_WIDTH / 2,
-        top: 0,
-        right: GAME_WIDTH - PLAYER_SIZE,
-        bottom: GAME_HEIGHT - PLAYER_SIZE,
-      };
-      spawnPositions[playerIds[2]] = {
-        x:
-          Math.floor(
-            Math.random() *
-              (players[playerIds[2]].bounds.right -
-                players[playerIds[2]].bounds.left)
-          ) +
-          players[playerIds[2]].bounds.left +
-          PLAYER_SIZE / 2,
-        y:
-          Math.floor(
-            Math.random() *
-              (players[playerIds[2]].bounds.bottom -
-                players[playerIds[2]].bounds.top)
-          ) +
-          players[playerIds[2]].bounds.top +
-          PLAYER_SIZE / 2,
-      };
-
-      // Player 3 ("Opponent" type): Bottom Half (Vertical Center Boundary)
-      players[playerIds[3]].bounds = {
-        left: 0,
-        top: GAME_HEIGHT / 2,
-        right: GAME_WIDTH - PLAYER_SIZE,
-        bottom: GAME_HEIGHT - PLAYER_SIZE,
-      };
-      spawnPositions[playerIds[3]] = {
-        x:
-          Math.floor(
-            Math.random() *
-              (players[playerIds[3]].bounds.right -
-                players[playerIds[3]].bounds.left)
-          ) +
-          players[playerIds[3]].bounds.left +
-          PLAYER_SIZE / 2,
-        y:
-          Math.floor(
-            Math.random() *
-              (players[playerIds[3]].bounds.bottom -
-                players[playerIds[3]].bounds.top)
-          ) +
-          players[playerIds[3]].bounds.top +
-          PLAYER_SIZE / 2,
-      };
-
-      // Assign initial positions to players data
       playerIds.forEach((id) => {
         players[id].lastPosition = spawnPositions[id];
         console.log(
-          `Player ${id} spawn at (${spawnPositions[id].x}, ${spawnPositions[id].y}) with bounds:`,
-          players[id].bounds
+          `Player ${id} spawn at (${spawnPositions[id].x}, ${spawnPositions[id].y})`
         );
       });
 
@@ -483,27 +422,23 @@ io.on("connection", (socket) => {
           // --- WINNING LOGIC CHECK ---
           if (
             players[playerId].score >= WINNING_SCORE &&
-            rooms[room].length === 4
+            !rooms[room].gameOver // prevent duplicate triggers
           ) {
-            // Only check for win if there are 4 players
-            rooms[room].gameOver = true; // Set game over flag for the room
+            rooms[room].gameOver = true;
             io.to(room).emit("gameOver", {
               winnerId: playerId,
               winnerName: players[playerId].name,
             });
             console.log(`🏆 Player ${playerId} won the game in room ${room}!`);
 
-            // Optionally, reset game state or remove room after a short delay
             setTimeout(() => {
-              io.to(room).emit("gameReset"); // Tell clients to go back to lobby or reset
-              // Clear players and room data after game over
+              io.to(room).emit("gameReset");
               rooms[room].forEach((id) => {
                 if (players[id]) delete players[id];
               });
               delete rooms[room];
               console.log(`♻️ Game state for room ${room} reset.`);
-            }, 5000); // 5 seconds after game over
-            return; // Stop further processing as game is over
+            }, 5000);
           }
 
           // Set opponent's status to respawning if game isn't over
@@ -660,7 +595,7 @@ io.on("connection", (socket) => {
           io.to(room).emit("updatePlayerList", playerList);
 
           // If a player disconnects and less than 4 players remain, end the game
-          if (rooms[room].length < 4 && rooms[room].length > 0) {
+          if (rooms[room].length < 2 && rooms[room].length > 0) {
             rooms[room].gameOver = true; // Set game over flag
             io.to(room).emit(
               "opponentDisconnected",

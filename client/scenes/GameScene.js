@@ -808,11 +808,15 @@ export class GameScene extends Phaser.Scene {
     this.showCooldown("hook", 4000);
 
     // Get the current mouse pointer's world coordinates
-    const worldPointer = this.input.activePointer.positionToCamera(
-      this.cameras.main
-    );
-    const targetX = worldPointer.x;
-    const targetY = worldPointer.y;
+    // const worldPointer = this.input.activePointer.positionToCamera(
+    //   this.cameras.main
+    // );
+    // const targetX = worldPointer.x;
+    // const targetY = worldPointer.y;
+
+    const pointer = this.input.activePointer;
+    const targetX = pointer.worldX;
+    const targetY = pointer.worldY;
 
     console.log("Hook fired (event sent to server)! Coords:", {
       from: { x: this.myBox.x, y: this.myBox.y },
@@ -828,6 +832,11 @@ export class GameScene extends Phaser.Scene {
       targetX,
       targetY,
     });
+
+    console.log("Target (mouse):", targetX, targetY);
+    console.log("Start (player):", this.myBox.x, this.myBox.y);
+    this.add.circle(targetX, targetY, 4, 0xff0000).setDepth(999); // dot at mouse
+    this.add.circle(this.myBox.x, this.myBox.y, 4, 0x00ff00).setDepth(999); // dot at start
   }
 
   /**
