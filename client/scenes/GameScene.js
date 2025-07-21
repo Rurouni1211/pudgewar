@@ -833,10 +833,10 @@ export class GameScene extends Phaser.Scene {
       targetY,
     });
 
-    console.log("Target (mouse):", targetX, targetY);
-    console.log("Start (player):", this.myBox.x, this.myBox.y);
-    this.add.circle(targetX, targetY, 4, 0xff0000).setDepth(999); // dot at mouse
-    this.add.circle(this.myBox.x, this.myBox.y, 4, 0x00ff00).setDepth(999); // dot at start
+    // console.log("Target (mouse):", targetX, targetY);
+    // console.log("Start (player):", this.myBox.x, this.myBox.y);
+    // this.add.circle(targetX, targetY, 4, 0xff0000).setDepth(999); // dot at mouse
+    // this.add.circle(this.myBox.x, this.myBox.y, 4, 0x00ff00).setDepth(999); // dot at start
   }
 
   /**
